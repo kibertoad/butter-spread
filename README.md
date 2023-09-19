@@ -6,6 +6,10 @@
 
 Execute chunked blocking operations in a way that won't cause event loop starvation
 
+Note that for best performance you should use worker threads. [piscina](https://github.com/piscinajs/piscina) is a fantastic library for that. 
+
+If, however, you need something simpler, or have to run your app in an environment that only has a single core, look no further than this library!
+
 ## Common usage
 
 ```ts
