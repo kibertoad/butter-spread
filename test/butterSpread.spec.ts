@@ -1,4 +1,4 @@
-import { executeSyncChunksConcurrently } from '../src/butterSpread'
+import { executeSyncChunksSequentially } from '../src/butterSpread'
 import { PorterStemmer } from 'natural'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -22,7 +22,7 @@ describe('butterSpread', () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
     const chunks = splitString(text, 1000)
 
-    const results = await executeSyncChunksConcurrently(chunks, processor, {
+    const results = await executeSyncChunksSequentially(chunks, processor, {
       id: 'Stemming',
       logger: defaultLogger,
       warningThresholdInMsecs: 50,
@@ -33,7 +33,7 @@ describe('butterSpread', () => {
   })
 
   it('returns empty output for empty input', async () => {
-    const results = await executeSyncChunksConcurrently([], processor)
+    const results = await executeSyncChunksSequentially([], processor)
 
     expect(results).toEqual([])
   })
@@ -53,7 +53,7 @@ describe('butterSpread', () => {
     const chunks = splitString(text, 1000)
 
     const startTime = Date.now()
-    const resultsPromise = executeSyncChunksConcurrently(chunks, processor, {
+    const resultsPromise = executeSyncChunksSequentially(chunks, processor, {
       id: 'Stemming',
       logger: defaultLogger,
       warningThresholdInMsecs: 50,
@@ -75,7 +75,7 @@ describe('butterSpread', () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
     const chunks = splitString(text, 1000000000)
 
-    await executeSyncChunksConcurrently(chunks, processor, {
+    await executeSyncChunksSequentially(chunks, processor, {
       id: 'Stemming',
       logger: defaultLogger,
       warningThresholdInMsecs: 1,
@@ -89,7 +89,7 @@ describe('butterSpread', () => {
 
   it('throws an error if something breaks', async () => {
     await expect(
-      executeSyncChunksConcurrently(
+      executeSyncChunksSequentially(
         ['a', 'b'],
         () => {
           throw new Error('It broke down')

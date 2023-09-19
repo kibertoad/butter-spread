@@ -10,7 +10,7 @@ export type ExecutionOptions = {
 }
 
 // Parallel
-export function executeSyncChunksConcurrently<InputChunk, OutputChunk>(
+export function executeSyncChunksSequentially<InputChunk, OutputChunk>(
   inputChunks: readonly InputChunk[],
   processor: SyncProcessor<InputChunk, OutputChunk>,
   options: ExecutionOptions = {
