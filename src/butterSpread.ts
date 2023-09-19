@@ -39,10 +39,7 @@ function processIteration<InputChunk, OutputChunk>(
 ) {
   setImmediate(() => {
     try {
-      let startTime: number
-      if (options.warningThresholdInMsecs) {
-        startTime = Date.now()
-      }
+      const startTime = options.warningThresholdInMsecs ? Date.now() : 0
       const chunk = inputs[index]
       results.push(processor(chunk))
       if (options.warningThresholdInMsecs) {
