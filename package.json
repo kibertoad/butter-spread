@@ -13,7 +13,8 @@
   },
   "files": [
     "dist",
-    "*.d.ts"
+    "README.md",
+    "LICENSE"
   ],
   "license": "MIT",
   "main": "dist/index.js",
@@ -23,14 +24,14 @@
   },
   "engineStrict": true,
   "scripts": {
-    "build": "del-cli dist && del-cli coverage && npm run test:ci",
+    "build": "del-cli dist && del-cli coverage && tsc",
     "lint": "eslint *.ts src/*.ts test/*.ts",
     "lint:fix": "eslint --fix *.ts src/*.ts test/*.ts",
     "format": "prettier --write \"{src,test}/**/*.ts\"",
     "test": "vitest",
     "test:coverage": "npm run test -- --coverage",
     "test:ci": "npm run lint && npm run test:coverage",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build && npm run test:ci"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^6.7.2",
@@ -50,6 +51,9 @@
   "keywords": [
     "event",
     "loop",
-    "starvation"
+    "starvation",
+    "chunk",
+    "execution",
+    "tick"
   ]
 }
