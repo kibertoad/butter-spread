@@ -1,4 +1,4 @@
-import { executeSyncChunks } from '../src/butterSpread'
+import { executeSyncChunksConcurrently } from '../src/butterSpread'
 import { PorterStemmer } from 'natural'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -22,7 +22,7 @@ describe('butterSpread', () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
     const chunks = splitString(text, 1000)
 
-    const results = await executeSyncChunks(chunks, processor, {
+    const results = await executeSyncChunksConcurrently(chunks, processor, {
       id: 'Stemming',
       logger: defaultLogger,
       warningThresholdInMsecs: 50,
@@ -47,14 +47,13 @@ describe('butterSpread', () => {
     const chunks = splitString(text, 1000)
 
     const startTime = Date.now()
-    const resultsPromise = executeSyncChunks(chunks, processor, {
+    const resultsPromise = executeSyncChunksConcurrently(chunks, processor, {
       id: 'Stemming',
       logger: defaultLogger,
       warningThresholdInMsecs: 50,
     })
 
     const response = await app.inject().get('/')
-    console.log('Received response!')
     expect(response.statusCode).toBe(200)
     const timeTaken = Date.now() - startTime
 
@@ -63,13 +62,14 @@ describe('butterSpread', () => {
     expect(sumTimeTaken > timeTaken).toBe(true)
 
     expect(loggingSpy.mock.calls.length).toBe(0)
+    await app.close()
   })
 
   it('logs warning when threshold is exceeded', async () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
     const chunks = splitString(text, 1000000000)
 
-    await executeSyncChunks(chunks, processor, {
+    await executeSyncChunksConcurrently(chunks, processor, {
       id: 'Stemming',
       logger: defaultLogger,
       warningThresholdInMsecs: 1,
@@ -79,5 +79,21 @@ describe('butterSpread', () => {
     expect(loggingSpy.mock.calls[0][0]).toMatch(
       /^Execution "Stemming" has exceeded the threshold, took (\d+) msecs for a single iteration, processing 1 elements\.$/,
     )
+  })
+
+  it('throws an error if something breaks', async () => {
+    await expect(
+      executeSyncChunksConcurrently(
+        ['a', 'b'],
+        () => {
+          throw new Error('It broke down')
+        },
+        {
+          id: 'Stemming',
+          logger: defaultLogger,
+          warningThresholdInMsecs: 1,
+        },
+      ),
+    ).rejects.toThrow(/It broke down/)
   })
 })
