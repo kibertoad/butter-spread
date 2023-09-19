@@ -9,11 +9,11 @@ Execute chunked blocking operations in a way that won't cause event loop starvat
 ## Common usage
 
 ```ts
-import { chunk, executeSyncChunksConcurrently, defaultLogger } from 'butter-spread'
+import { chunk, executeSyncChunksSequentially, defaultLogger } from 'butter-spread'
 
 const chunks = chunk(someInputArray, 100)
 
-const results = await executeSyncChunksConcurrently(chunks, (chunk) => { return someProcessingLogic(chunk) }, {
+const results = await executeSyncChunksSequentially(chunks, (chunk) => { return someProcessingLogic(chunk) }, {
     id: 'Some blocking operation', // this is used for logging purposes if threshold is exceeded
     logger: defaultLogger,
     warningThresholdInMsecs: 200, // warning will be logged if any single iteration (which blocks the loop) will take longer than that
