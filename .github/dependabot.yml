@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    ignore:
+      - dependency-name: "rollup"
+      - dependency-name: "@rollup/*"
+      - dependency-name: "auto-changelog"
+    groups:
+      common:
+        patterns:
+          - "@types/*"
+          - "@typescript-eslint/*"
+          - "eslint"
+          - "eslint-*"
+          - "prettier"
+      testing:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+          - "tsd"
+      typescript:
+        patterns:
+          - "ts-node"
+          - "ts-node-dev"
+          - "typescript"
