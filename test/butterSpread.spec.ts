@@ -32,6 +32,12 @@ describe('butterSpread', () => {
     expect(loggingSpy.mock.calls.length).toBe(0)
   })
 
+  it('returns empty output for empty input', async () => {
+    const results = await executeSyncChunksConcurrently([], processor)
+
+    expect(results).toEqual([])
+  })
+
   it('does not block event loop', async () => {
     sumTimeTaken = 0
     const app = fastify()
