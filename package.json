@@ -1,7 +1,7 @@
 {
   "name": "butter-spread",
   "description": "Execute chunked blocking operations in a way that won't cause event loop starvation",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "homepage": "https://github.com/kibertoad/butter-spread",
   "author": "Igor Savin <kibertoad@gmail.com>",
   "repository": {
