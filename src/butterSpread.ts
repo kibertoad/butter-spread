@@ -39,7 +39,6 @@ export function executeSyncChunks<InputChunk, OutputChunk>(
           }
 
           if (results.length === inputChunks.length) {
-            console.log('Finished processing!')
             resolve(results)
           }
         })
