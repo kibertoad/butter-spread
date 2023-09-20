@@ -45,7 +45,7 @@ function processIteration<InputChunk, OutputChunk>(
       if (options.warningThresholdInMsecs) {
         const timeTaken = Date.now() - startTime
         if (timeTaken >= options.warningThresholdInMsecs) {
-          const length = Array.isArray(chunk) ? chunk.length : 1
+          const length = Array.isArray(chunk) || typeof chunk === 'string' ? chunk.length : 1
           options.logger.warn(
             `Execution "${options.id}" has exceeded the threshold, took ${timeTaken} msecs for a single iteration, processing ${length} elements.`,
           )
