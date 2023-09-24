@@ -34,19 +34,19 @@
     "prepublishOnly": "npm run build && npm run test:ci"
   },
   "devDependencies": {
-    "@types/node": "^20.6.3",
+    "@types/node": "^20.6.4",
     "@typescript-eslint/eslint-plugin": "^6.7.2",
     "@typescript-eslint/parser": "^6.7.2",
-    "@vitest/coverage-v8": "^0.34.3",
+    "@vitest/coverage-v8": "^0.34.5",
     "del-cli": "^5.1.0",
-    "eslint": "^8.49.0",
+    "eslint": "^8.50.0",
     "eslint-config-prettier": "^9.0.0",
     "eslint-plugin-import": "^2.28.1",
     "eslint-plugin-prettier": "^5.0.0",
     "eslint-plugin-vitest": "^0.3.1",
     "fastify": "^4.23.2",
     "node-nlp": "^4.27.0",
-    "vitest": "^0.34.4",
+    "vitest": "^0.34.5",
     "typescript": "^5.2.2"
   },
   "keywords": [

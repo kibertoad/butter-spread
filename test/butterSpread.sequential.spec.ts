@@ -5,20 +5,25 @@ import { splitString } from '../src/arrayUtils'
 import { vitest } from 'vitest'
 import { defaultLogger } from '../src/logger'
 import { fastify } from 'fastify'
+// @ts-ignore
 import nlp from 'node-nlp'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let stemmer: any
 let sumTimeTaken: number
+let executionCounter: number
 const processor = (param: string) => {
+  console.log('start processing an entry')
   const start = Date.now()
   const result = stemmer.tokenizeAndStem(param)
   sumTimeTaken += Date.now() - start
+  executionCounter++
 
   return result
 }
 const text = readFileSync(resolve(__dirname, 'test.txt')).toString()
-const largeText = readFileSync(resolve(__dirname, 'largeTest.txt')).toString()
+const largeTextRaw = readFileSync(resolve(__dirname, 'largeTest.txt')).toString()
+const largeText = largeTextRaw + largeTextRaw + largeTextRaw + largeTextRaw + largeTextRaw
 const languageCode = 'en'
 
 describe('butterSpread', () => {
@@ -46,13 +51,16 @@ describe('butterSpread', () => {
   })
 
   it('returns empty output for empty input', async () => {
-    const results = await executeSyncChunksSequentially([], processor)
+    const results = await executeSyncChunksSequentially([], processor, {
+      id: 'someId',
+    })
 
     expect(results).toEqual([])
   })
 
   it('does not block event loop', async () => {
     sumTimeTaken = 0
+    executionCounter = 0
     const app = fastify()
     app.route({
       method: 'GET',
@@ -72,13 +80,56 @@ describe('butterSpread', () => {
       warningThresholdInMsecs: 50,
     })
 
+    await vitest.waitUntil(() => {
+      return executionCounter > 0
+    })
     const response = await app.inject().get('/')
+    console.log('received response')
     expect(response.statusCode).toBe(200)
     const timeTaken = Date.now() - startTime
 
     await resultsPromise
     // check that request was processed before all of the operation chunks were completed
     expect(sumTimeTaken > timeTaken).toBe(true)
+
+    expect(loggingSpy.mock.calls.length).toBe(0)
+    await app.close()
+  })
+
+  it('processes synchronously within a given timeframe', async () => {
+    sumTimeTaken = 0
+    executionCounter = 0
+    const app = fastify()
+    app.route({
+      method: 'GET',
+      url: '/',
+      handler: (req, res) => {
+        return res.send({})
+      },
+    })
+
+    const loggingSpy = vitest.spyOn(console, 'warn')
+    const chunks = splitString(largeText, 50000)
+
+    const startTime = Date.now()
+    const resultsPromise = executeSyncChunksSequentially(chunks, processor, {
+      id: 'Stemming',
+      logger: defaultLogger,
+      warningThresholdInMsecs: 1000,
+      executeSynchronouslyThresholdInMsecs: 500,
+    })
+
+    await vitest.waitUntil(() => {
+      return executionCounter > 0
+    })
+    const response = await app.inject().get('/')
+    console.log('received response')
+    expect(response.statusCode).toBe(200)
+    const timeTaken = Date.now() - startTime
+
+    await resultsPromise
+    // check that request was processed before all of the operation chunks were completed
+    expect(sumTimeTaken > timeTaken).toBe(false)
 
     expect(loggingSpy.mock.calls.length).toBe(0)
     await app.close()
