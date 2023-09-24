@@ -25,6 +25,7 @@
 	"rules": {
 		"prettier/prettier": "error",
 		"prefer-const": "off",
-		"no-var": "off"
+		"no-var": "off",
+		"@typescript-eslint/ban-ts-comment": "off"
 	}
 }
