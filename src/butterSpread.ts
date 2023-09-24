@@ -11,12 +11,12 @@ export type ExecutionOptions = {
 }
 
 export const defaultExecutionOptions = {
-  warningThresholdInMsecs: 20,
-  executeSynchronouslyThresholdInMsecs: 10,
+  warningThresholdInMsecs: 30,
+  executeSynchronouslyThresholdInMsecs: 15,
   logger: defaultLogger,
 } as const
 
-// One by one
+// Schedule new chunk after previous one is completed or process immediately if execution threshold not yet exceeded
 export function executeSyncChunksSequentially<InputChunk, OutputChunk>(
   inputChunks: readonly InputChunk[],
   processor: SyncProcessor<InputChunk, OutputChunk>,
@@ -40,7 +40,6 @@ export function executeSyncChunksSequentially<InputChunk, OutputChunk>(
         results,
         resolve,
         reject,
-        0,
       ),
     )
   })
@@ -57,30 +56,42 @@ function processIteration<InputChunk, OutputChunk>(
   results: OutputChunk[],
   resolve: (output: OutputChunk[]) => void,
   reject: (err: unknown) => void,
-  totalTimeSoFarInMsecs: number,
 ) {
+  let timeTaken = 0
+  let chunksProcessed = 0
+  let stopProcessing = false
+
   try {
-    const startTime = Date.now()
-    const chunk = inputs[index]
-    results.push(processor(chunk))
-    const timeTaken = Date.now() - startTime + totalTimeSoFarInMsecs
-    if (options.warningThresholdInMsecs) {
-      if (timeTaken >= options.warningThresholdInMsecs) {
-        const length = Array.isArray(chunk) || typeof chunk === 'string' ? chunk.length : 1
-        options.logger.warn(
-          `Execution "${options.id}" has exceeded the threshold, took ${timeTaken} msecs for a single iteration, processing ${length} elements.`,
-        )
+    while (!stopProcessing) {
+      const chunk = inputs[index]
+      const chunkStartTime = Date.now()
+      const chunkResult = processor(chunk)
+      const chunkTimeTaken = Date.now() - chunkStartTime
+
+      results.push(chunkResult)
+      timeTaken += chunkTimeTaken
+      chunksProcessed++
+
+      if (options.warningThresholdInMsecs) {
+        if (timeTaken >= options.warningThresholdInMsecs) {
+          const length = Array.isArray(chunk) || typeof chunk === 'string' ? chunk.length : 1
+          options.logger.warn(
+            `Execution "${options.id}" has exceeded the threshold, took ${timeTaken} msecs for a single iteration. ${chunksProcessed} chunks were processed. Last chunk took ${chunkTimeTaken} msecs for ${length} elements.`,
+          )
+        }
       }
-    }
-    if (results.length !== inputs.length) {
-      // we haven't exceeded our threshold for deferred execution, let's continue
-      if (timeTaken < options.executeSynchronouslyThresholdInMsecs) {
-        processIteration(index + 1, inputs, processor, options, results, resolve, reject, timeTaken)
+      if (results.length !== inputs.length) {
+        // we haven't exceeded our threshold for deferred execution, let's continue
+        if (timeTaken < options.executeSynchronouslyThresholdInMsecs) {
+          index++
+        } else {
+          setImmediate(() => processIteration(index + 1, inputs, processor, options, results, resolve, reject))
+          stopProcessing = true
+        }
       } else {
-        setImmediate(() => processIteration(index + 1, inputs, processor, options, results, resolve, reject, 0))
+        resolve(results)
+        stopProcessing = true
       }
-    } else {
-      resolve(results)
     }
   } catch (err) {
     reject(err)
