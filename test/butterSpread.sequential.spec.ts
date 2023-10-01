@@ -1,12 +1,12 @@
 import { executeSyncChunksSequentially } from '../src/butterSpread'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { splitString } from '../src/arrayUtils'
 import { vitest } from 'vitest'
 import { defaultLogger } from '../src/logger'
 import { fastify } from 'fastify'
 // @ts-ignore
 import nlp from 'node-nlp'
+import { splitTextPreserveWords } from '../src/stringUtils'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let stemmer: any
@@ -38,7 +38,7 @@ describe('butterSpread', () => {
 
   it('does not log warning when threshold is not exceeded', async () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitString(text, 1000)
+    const chunks = splitTextPreserveWords(text, 1000)
 
     const results = await executeSyncChunksSequentially(chunks, processor, {
       id: 'Stemming',
@@ -71,7 +71,7 @@ describe('butterSpread', () => {
     })
 
     const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitString(largeText, 50000)
+    const chunks = splitTextPreserveWords(largeText, 50000)
 
     const startTime = Date.now()
     const resultsPromise = executeSyncChunksSequentially(chunks, processor, {
@@ -109,7 +109,7 @@ describe('butterSpread', () => {
     })
 
     const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitString(largeText, 50000)
+    const chunks = splitTextPreserveWords(largeText, 50000)
 
     const startTime = Date.now()
     const resultsPromise = executeSyncChunksSequentially(chunks, processor, {
@@ -137,7 +137,7 @@ describe('butterSpread', () => {
 
   it('logs warning when threshold is exceeded', async () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitString(text, 1000000000)
+    const chunks = splitTextPreserveWords(text, 1000000000)
 
     await executeSyncChunksSequentially(chunks, processor, {
       id: 'Stemming',
