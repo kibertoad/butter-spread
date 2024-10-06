@@ -1,9 +1,9 @@
 export type LogFn = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: This is intentional
   <T extends object>(obj: T, msg?: string, ...args: any[]): void
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: This is intentional
   (obj: unknown, msg?: string, ...args: any[]): void
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // biome-ignore lint/suspicious/noExplicitAny: This is intentional
   (msg: string, ...args: any[]): void
 }
 
