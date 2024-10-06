@@ -34,7 +34,7 @@
     "@types/node": "^20.16.10",
     "@vitest/coverage-v8": "^2.1.2",
     "del-cli": "^5.1.0",
-    "fastify": "^5.0.0",
+    "fastify": "^4.28.1",
     "node-nlp": "^4.27.0",
     "vitest": "^2.1.2",
     "typescript": "^5.6.2"
