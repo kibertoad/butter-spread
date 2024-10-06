@@ -1,5 +1,5 @@
 export function splitTextPreserveWords(fullText: string, maxLength: number): string[] {
-  let result = []
+  const result = []
   let startPos = 0
 
   while (startPos < fullText.length) {
@@ -23,8 +23,12 @@ export function splitTextPreserveWords(fullText: string, maxLength: number): str
   return result
 }
 
-export function getSlicePreserveWords(fullText: string, sliceSize: number, startPos?: number): string {
-  startPos = startPos ?? 0
+export function getSlicePreserveWords(
+  fullText: string,
+  sliceSize: number,
+  _startPos?: number,
+): string {
+  const startPos = _startPos ?? 0
 
   let endPos = Math.min(startPos + sliceSize, fullText.length)
   if (endPos < fullText.length) {

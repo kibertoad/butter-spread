@@ -1,14 +1,13 @@
-import { executeSyncChunksSequentially } from '../src/butterSpread'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { vitest } from 'vitest'
-import { defaultLogger } from '../src/logger'
 import { fastify } from 'fastify'
 // @ts-ignore
 import nlp from 'node-nlp'
+import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest'
+import { executeSyncChunksSequentially } from '../src/butterSpread'
+import { defaultLogger } from '../src/logger'
 import { splitTextPreserveWords } from '../src/stringUtils'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let stemmer: any
 let sumTimeTaken: number
 let executionCounter: number
@@ -65,7 +64,7 @@ describe('butterSpread', () => {
     app.route({
       method: 'GET',
       url: '/',
-      handler: (req, res) => {
+      handler: (_req, res) => {
         return res.send({})
       },
     })
@@ -103,7 +102,7 @@ describe('butterSpread', () => {
     app.route({
       method: 'GET',
       url: '/',
-      handler: (req, res) => {
+      handler: (_req, res) => {
         return res.send({})
       },
     })

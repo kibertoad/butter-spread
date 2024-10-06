@@ -45,8 +45,9 @@ export function executeSyncChunksSequentially<InputChunk, OutputChunk>(
   })
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: This is intentional
 function processIteration<InputChunk, OutputChunk>(
-  index: number,
+  _index: number,
   inputs: readonly InputChunk[],
   processor: SyncProcessor<InputChunk, OutputChunk>,
   options: ExecutionOptions & {
@@ -60,6 +61,7 @@ function processIteration<InputChunk, OutputChunk>(
   let timeTaken = 0
   let chunksProcessed = 0
   let stopProcessing = false
+  let index = _index
 
   try {
     while (!stopProcessing) {
@@ -85,7 +87,9 @@ function processIteration<InputChunk, OutputChunk>(
         if (timeTaken < options.executeSynchronouslyThresholdInMsecs) {
           index++
         } else {
-          setImmediate(() => processIteration(index + 1, inputs, processor, options, results, resolve, reject))
+          setImmediate(() =>
+            processIteration(index + 1, inputs, processor, options, results, resolve, reject),
+          )
           stopProcessing = true
         }
       } else {

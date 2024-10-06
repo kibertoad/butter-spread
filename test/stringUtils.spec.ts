@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest'
 import { getSlicePreserveWords, splitTextPreserveWords } from '../src/stringUtils'
 
 describe('stringUtils', () => {
