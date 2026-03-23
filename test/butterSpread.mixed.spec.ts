@@ -176,11 +176,31 @@ describe('executeMixedChunksSequentially', () => {
     await app.close()
   })
 
-  it('logs warning when threshold is exceeded', async () => {
+  it('logs warning when threshold is exceeded with sync processor', async () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
     const chunks = splitTextPreserveWords(text, 1000000000)
 
     await executeMixedChunksSequentially(chunks, syncProcessor, {
+      id: 'Stemming',
+      logger: defaultLogger,
+      warningThresholdInMsecs: 1,
+    })
+
+    expect(loggingSpy.mock.calls.length).toBe(1)
+    expect(loggingSpy.mock.calls[0][0]).toMatch(
+      /^Execution "Stemming" has exceeded the threshold, took (\d+) msecs for a single iteration. (\d+) chunks were processed. Last chunk took (\d+) msecs for (\d+) elements.$/,
+    )
+  })
+
+  it('logs warning when threshold is exceeded with async processor', async () => {
+    const loggingSpy = vitest.spyOn(console, 'warn')
+    const chunks = splitTextPreserveWords(text, 1000000000)
+
+    const asyncProcessor = (param: string) => {
+      return Promise.resolve(stemmer.tokenizeAndStem(param))
+    }
+
+    await executeMixedChunksSequentially(chunks, asyncProcessor, {
       id: 'Stemming',
       logger: defaultLogger,
       warningThresholdInMsecs: 1,
