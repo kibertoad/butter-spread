@@ -227,7 +227,7 @@ describe('stream assertions — memory-watchmen', { timeout: STARVATION_TEST_TIM
         },
       })
 
-      writable.write('x'.repeat(100))
+      await drainAwareWrite(writable, 'x'.repeat(100))
 
       await assertDrainOccurred(writable, 5000)
     })
