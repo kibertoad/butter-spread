@@ -55,6 +55,8 @@ Processes chunks using a processor that can return either a value or a Promise. 
 
 This is useful when some chunks require async operations (e.g. I/O) while others are purely computational.
 
+**Important:** The async path must perform real async work (I/O, `setTimeout`, `setImmediate`) that yields the event loop. `await Promise.resolve(value)` resolves as a microtask on the current tick and does **not** yield — the executor resets its time counter assuming the `await` yielded, but no yielding actually occurs. If your processor always returns synchronously-resolved promises (e.g. a cache that wraps results in `Promise.resolve()`), use `executeSyncChunksSequentially` instead and unwrap the cache synchronously.
+
 ```ts
 import { chunk, executeMixedChunksSequentially } from 'butter-spread'
 
