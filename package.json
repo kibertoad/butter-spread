@@ -39,6 +39,7 @@
     "@vitest/coverage-v8": "^3.2.4",
     "del-cli": "^7.0.0",
     "fastify": "^5.8.4",
+    "memory-watchmen": "^1.2.0",
     "node-nlp": "^4.27.0",
     "typescript": "^5.6.2",
     "vitest": "^3.2.4"
