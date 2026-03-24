@@ -11,7 +11,11 @@
   "bugs": {
     "url": "https://github.com/kibertoad/butter-spread/issues"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -29,15 +33,22 @@
     "prepublishOnly": "npm run build && npm run test:ci"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.3",
-    "@kibertoad/biome-config": "^1.2.1",
+    "@biomejs/biome": "^2.4.8",
+    "@kibertoad/biome-config": "^2.0.0",
     "@types/node": "^20.16.10",
-    "@vitest/coverage-v8": "^2.1.2",
-    "del-cli": "^5.1.0",
-    "fastify": "^4.28.1",
+    "@vitest/coverage-v8": "^3.2.4",
+    "del-cli": "^7.0.0",
+    "fastify": "^5.8.4",
     "node-nlp": "^4.27.0",
-    "vitest": "^2.1.2",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "vitest": "^3.2.4"
   },
-  "keywords": ["event", "loop", "starvation", "chunk", "execution", "tick"]
+  "keywords": [
+    "event",
+    "loop",
+    "starvation",
+    "chunk",
+    "execution",
+    "tick"
+  ]
 }
