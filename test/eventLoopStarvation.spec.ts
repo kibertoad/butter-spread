@@ -67,7 +67,9 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
     it('reports detailed event loop metrics via withEventLoopMonitor', async () => {
       const result = await withEventLoopMonitor(async (ctx) => {
         while (!ctx.stopped.value) {
-          await executeSyncChunksSequentially(makeWorkload(WORKLOAD_SIZE), cpuBurn, { id: 'metrics-sync' })
+          await executeSyncChunksSequentially(makeWorkload(WORKLOAD_SIZE), cpuBurn, {
+            id: 'metrics-sync',
+          })
         }
       }, monitorOpts)
 
