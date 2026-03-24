@@ -5,6 +5,10 @@ export type SyncProcessor<InputChunk, OutputChunk> = (chunk: InputChunk) => Outp
 export type MixedProcessor<InputChunk, OutputChunk> = (
   chunk: InputChunk,
 ) => OutputChunk | Promise<OutputChunk>
+export type TwoPhaseProcessor<InputChunk, IntermediateChunk, OutputChunk> = {
+  syncTransform: (chunk: InputChunk) => IntermediateChunk
+  asyncPostProcess: (intermediates: IntermediateChunk[]) => Promise<OutputChunk[]>
+}
 
 export type ExecutionOptions = {
   id: string
@@ -182,6 +186,62 @@ export async function executeMixedChunksSequentially<InputChunk, OutputChunk>(
         timeTaken = 0
         chunksProcessed = 0
       }
+    }
+  }
+
+  return results
+}
+
+export async function executeTwoPhaseChunksSequentially<InputChunk, IntermediateChunk, OutputChunk>(
+  inputChunks: readonly InputChunk[],
+  processor: TwoPhaseProcessor<InputChunk, IntermediateChunk, OutputChunk>,
+  options: ExecutionOptions,
+): Promise<OutputChunk[]> {
+  if (inputChunks.length === 0) {
+    return []
+  }
+
+  const resolvedOptions = { ...defaultExecutionOptions, ...options }
+  const results: OutputChunk[] = []
+
+  // Initial yield to match existing behavior
+  await new Promise<void>((resolve) => setImmediate(resolve))
+
+  let timeTaken = 0
+  let chunksProcessed = 0
+  let pendingIntermediates: IntermediateChunk[] = []
+
+  for (let index = 0; index < inputChunks.length; index++) {
+    const chunk = inputChunks[index]
+
+    // Phase 1: Synchronous transform — accumulate intermediates
+    const chunkStartTime = Date.now()
+    const intermediate = processor.syncTransform(chunk)
+    const chunkTimeTaken = Date.now() - chunkStartTime
+
+    pendingIntermediates.push(intermediate)
+    timeTaken += chunkTimeTaken
+    chunksProcessed++
+
+    if (resolvedOptions.warningThresholdInMsecs) {
+      if (timeTaken >= resolvedOptions.warningThresholdInMsecs) {
+        const length = Array.isArray(chunk) || typeof chunk === 'string' ? chunk.length : 1
+        resolvedOptions.logger.warn(
+          `Execution "${resolvedOptions.id}" has exceeded the threshold, took ${timeTaken} msecs for a single iteration. ${chunksProcessed} chunks were processed. Last chunk took ${chunkTimeTaken} msecs for ${length} elements.`,
+        )
+      }
+    }
+
+    // Flush when sync threshold is exceeded or on the last chunk
+    const isLastChunk = index === inputChunks.length - 1
+    if (isLastChunk || timeTaken >= resolvedOptions.executeSynchronouslyThresholdInMsecs) {
+      // Phase 2: Async post-processing of accumulated batch (yields to event loop naturally)
+      const batchResults = await processor.asyncPostProcess(pendingIntermediates)
+      results.push(...batchResults)
+
+      pendingIntermediates = []
+      timeTaken = 0
+      chunksProcessed = 0
     }
   }
 
