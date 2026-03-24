@@ -33,11 +33,12 @@ function makeWorkload(size: number): number[] {
   return Array.from({ length: size }, (_, i) => i)
 }
 
-// Shared monitoring options: fast sampling for CI-friendly test times.
+// Shared monitoring options for both real and placebo tests.
+// Identical thresholds ensure the only variable is whether butter-spread
+// is used — the setup and conditions are the same.
 // maxUtilization is null because butter-spread keeps the event loop
 // busy-but-responsive (high utilization, low latency). The key metric
-// is delay, not utilization — this is the "saturation without starvation"
-// pattern described in memory-watchmen's PATTERNS.md.
+// is delay, not utilization.
 const monitorOpts = {
   warmUpMs: 200,
   sampleCount: 4,
@@ -45,18 +46,6 @@ const monitorOpts = {
   maxP99DelayMs: 100,
   maxMeanDelayMs: 50,
   maxUtilization: null as null,
-}
-
-// Placebo thresholds: same timing but tighter delay limits to prove raw loops
-// cause starvation. We keep maxUtilization strict here since uncontrolled
-// workloads will also saturate utilization.
-const placeboOpts = {
-  warmUpMs: 200,
-  sampleCount: 4,
-  sampleIntervalMs: 200,
-  maxP99DelayMs: 25,
-  maxMeanDelayMs: 15,
-  maxUtilization: 0.9,
 }
 
 const STARVATION_TEST_TIMEOUT = 15_000
@@ -95,7 +84,7 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
           // Yield once per full pass so monitoring timers can fire
           await new Promise<void>((resolve) => setImmediate(resolve))
         }
-      }, placeboOpts)
+      }, monitorOpts)
 
       expect(result.passed).toBe(false)
     })
@@ -150,7 +139,7 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
           }
           await new Promise<void>((resolve) => setImmediate(resolve))
         }
-      }, placeboOpts)
+      }, monitorOpts)
 
       expect(result.passed).toBe(false)
     })
@@ -185,7 +174,7 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
           }
           await new Promise<void>((resolve) => setImmediate(resolve))
         }
-      }, placeboOpts)
+      }, monitorOpts)
 
       expect(result.passed).toBe(false)
     })
