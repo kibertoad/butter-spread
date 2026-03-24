@@ -31,7 +31,9 @@ describe('executeMixedChunksSequentially', () => {
     stemmer = manager.container.get(`stemmer-${languageCode}`)
   })
 
-  afterEach(() => {})
+  afterEach(() => {
+    vitest.restoreAllMocks()
+  })
 
   it('returns empty output for empty input', async () => {
     const results = await executeMixedChunksSequentially([], syncProcessor, {
@@ -180,6 +182,13 @@ describe('executeMixedChunksSequentially', () => {
     const loggingSpy = vitest.spyOn(console, 'warn')
     const chunks = splitTextPreserveWords(text, 1000000000)
 
+    let now = 0
+    const dateNowSpy = vitest.spyOn(Date, 'now')
+    dateNowSpy.mockImplementation(() => {
+      // Each call advances time by 100ms, guaranteeing threshold is exceeded
+      return (now += 100)
+    })
+
     await executeMixedChunksSequentially(chunks, syncProcessor, {
       id: 'Stemming',
       logger: defaultLogger,
@@ -199,6 +208,13 @@ describe('executeMixedChunksSequentially', () => {
     const asyncProcessor = (param: string) => {
       return Promise.resolve(stemmer.tokenizeAndStem(param))
     }
+
+    let now = 0
+    const dateNowSpy = vitest.spyOn(Date, 'now')
+    dateNowSpy.mockImplementation(() => {
+      // Each call advances time by 100ms, guaranteeing threshold is exceeded
+      return (now += 100)
+    })
 
     await executeMixedChunksSequentially(chunks, asyncProcessor, {
       id: 'Stemming',
