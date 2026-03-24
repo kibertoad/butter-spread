@@ -1,8 +1,19 @@
 # Patterns: Event Loop, Streams, and Deferred Execution
 
-This document covers common problems in Node.js related to event loop starvation and stream backpressure, their native solutions, and where `butter-spread` fits in.
+This document covers common problems in Node.js related to event loop starvation and stream backpressure, and how to solve them — starting with native solutions that should be your first choice, then showing where `butter-spread` can help when they're not enough.
 
-## The problem: event loop starvation
+## Start here: do you actually need a library?
+
+Most event-loop and backpressure problems have good native solutions built into Node.js. Reach for `butter-spread` only when the native approach doesn't fit:
+
+| Problem | First choice (native) | When to consider butter-spread |
+|---------|----------------------|-------------------------------|
+| Sync code blocking the event loop | `setImmediate` with manual chunking | Per-item cost varies widely; you need the yielding to adapt at runtime |
+| Stream backpressure on writes | `stream.pipeline()` with Transform streams | You need to interleave writes with side effects that break the pipeline model |
+| Bulk-processing stream items | Manual batch accumulation in `for await` | You have multiple batch-processing sites and want a reusable primitive |
+| Sync transform → async I/O pipeline | Manual `setImmediate`-based flushing | You have multiple such pipelines and want consistent threshold behavior and observability |
+
+## Event loop starvation
 
 Node.js runs JavaScript on a single thread. When synchronous code runs for too long, it blocks the event loop — HTTP requests queue up, timers miss their deadlines, and the process appears frozen.
 
@@ -13,9 +24,9 @@ const results = hugeArray.map((item) => expensiveTransform(item))
 
 This is fine when the array is small or the transform is fast. It becomes a problem when the total sync time exceeds ~10-20ms, which is enough to cause noticeable latency spikes for other requests.
 
-### Native solution: `setImmediate`
+### Recommended: `setImmediate` with manual chunking
 
-`setImmediate` schedules a callback at the end of the current event loop iteration, allowing pending I/O and timers to execute first:
+`setImmediate` schedules a callback at the end of the current event loop iteration, allowing pending I/O and timers to execute first. This is the standard Node.js mechanism for yielding:
 
 ```ts
 function processInChunks(items, chunkSize, processor) {
@@ -37,16 +48,17 @@ function processInChunks(items, chunkSize, processor) {
 }
 ```
 
-This works but requires manual chunk size tuning. Too small = overhead from scheduling. Too large = back to blocking.
+This is straightforward and has zero dependencies. It works well when the per-item cost is predictable — you profile once, pick a chunk size (say, 100 items), and it stays correct. If you only have one or two places in your codebase that need this, the manual approach is the right choice.
 
-### butter-spread solution: threshold-based yielding
+### With butter-spread: threshold-based yielding
 
-Instead of a fixed chunk size, `butter-spread` measures elapsed time and yields when a threshold is exceeded. This adapts automatically to the speed of the processor:
+The manual approach breaks down when per-item cost varies significantly. For example, NLP tokenization on short strings takes <1ms but on long paragraphs can take 10ms+. A fixed chunk size of 100 items might complete in 5ms for short text but 500ms for long text. You'd need to either pick a very conservative chunk size (hurting throughput on the common fast path) or accept occasional blocking on the slow path.
+
+`butter-spread` replaces the fixed chunk size with a time-based threshold — it measures actual elapsed time and yields when the threshold is exceeded:
 
 ```ts
 import { chunk, executeSyncChunksSequentially } from 'butter-spread'
 
-// Split a large array of text segments for NLP processing
 const chunks = chunk(textSegments, 100)
 const results = await executeSyncChunksSequentially(chunks, (chunk) => {
     return chunk.map((segment) => stemmer.tokenizeAndStem(segment))
@@ -57,105 +69,14 @@ const results = await executeSyncChunksSequentially(chunks, (chunk) => {
 })
 ```
 
-If the transform is fast, many chunks run in a single tick. If it's slow, the library yields more often. You don't need to guess the right chunk size for your hardware.
+Concrete differences from the manual approach:
+- **Adaptive yielding**: if 80 items process in 14ms, the 81st runs immediately. If 3 items take 16ms, it yields after 3. The manual approach always processes the same fixed count.
+- **Warning logging**: when a chunk exceeds the warning threshold, it logs which operation, how long it took, and how many items. This helps you detect performance regressions in production without adding your own instrumentation.
+- **Consistent interface**: if you have many chunked-processing call sites, they all use the same `ExecutionOptions` shape with the same threshold semantics, rather than each reimplementing its own timing logic.
 
-## The problem: mixed sync/async processing
+If your per-item cost is stable and you only chunk in one or two places, the native approach is simpler and has no dependency cost.
 
-Sometimes a processor is synchronous for most inputs but needs to go async for others — e.g., a cache that hits memory for most lookups but falls back to a database:
-
-```ts
-// Naive approach: always async, even when not needed
-for (const key of keys) {
-    const value = await lookup(key) // unnecessary await on cache hits
-    results.push(value)
-}
-```
-
-Making every call `async` is correct but introduces unnecessary yielding overhead when most calls resolve synchronously.
-
-### butter-spread solution: mixed execution
-
-`executeMixedChunksSequentially` detects whether each processor call returns a value or a Promise. Sync returns accumulate without yielding; async returns naturally yield and reset counters:
-
-```ts
-import { chunk, executeMixedChunksSequentially } from 'butter-spread'
-
-const chunks = chunk(keys, 50)
-const results = await executeMixedChunksSequentially(chunks, (keyBatch) => {
-    const allCached = keyBatch.every((key) => cache.has(key))
-    if (allCached) {
-        // Fast path: pure sync, no event loop yield needed
-        return keyBatch.map((key) => cache.get(key))
-    }
-    // Slow path: async DB lookup, naturally yields to event loop
-    return fetchFromDatabase(keyBatch)
-}, {
-    id: 'cache-lookup',
-})
-```
-
-## The problem: sync transform followed by async I/O
-
-Many real-world pipelines look like this:
-
-```ts
-for (const batch of batches) {
-    const transformed = batch.map((item) => cpuIntensiveTransform(item)) // sync, may block
-    await bulkInsert(transformed) // async, yields
-}
-```
-
-The `await` yields to the event loop, but only *after* the entire `.map()` completes. If the batch has thousands of items with regex replacements, JSON parsing, or UUID conversions, that `.map()` can block for 20-50ms.
-
-### Native solution: manual chunking with `setImmediate`
-
-```ts
-async function processWithYielding(items, transformFn, insertFn, timeLimit) {
-    let pending = []
-    let start = Date.now()
-    for (const item of items) {
-        pending.push(transformFn(item))
-        if (Date.now() - start >= timeLimit) {
-            await insertFn(pending)
-            pending = []
-            start = Date.now()
-            await new Promise((resolve) => setImmediate(resolve))
-        }
-    }
-    if (pending.length > 0) await insertFn(pending)
-}
-```
-
-This works but is boilerplate-heavy and easy to get wrong (forgetting the final flush, incorrect timing, no warning logging).
-
-### butter-spread solution: two-phase execution
-
-`executeTwoPhaseChunksSequentially` encapsulates this pattern. It accumulates sync results until the time threshold is hit, then flushes the batch to the async post-processor:
-
-```ts
-import { executeTwoPhaseChunksSequentially } from 'butter-spread'
-
-// Snapshot restoration: parse JSONL lines, remap IDs, bulk insert
-const results = await executeTwoPhaseChunksSequentially(jsonlLines, {
-    syncTransform: (line) => {
-        const parsed = JSON.parse(line)
-        // CPU-intensive: regex key-reference replacement, UUID conversion
-        return remapIds(parsed, idMapping)
-    },
-    asyncPostProcess: async (batch) => {
-        // Single bulk insert for the accumulated batch
-        return await db.insert(tableName).values(batch).returning()
-    },
-}, {
-    id: 'restore-translations',
-    executeSynchronouslyThresholdInMsecs: 15, // flush to DB and yield when sync time exceeds this
-    warningThresholdInMsecs: 30, // log if sync transforms are taking too long
-})
-```
-
-This runs sync transforms back-to-back for efficiency and flushes to a bulk insert when the event loop needs breathing room. The async phase resets all counters, so the next batch of sync transforms starts fresh.
-
-## The problem: stream backpressure
+## Stream backpressure
 
 When writing to a stream faster than it can flush, Node.js buffers the data in memory. Without backpressure handling, this can cause unbounded memory growth:
 
@@ -168,9 +89,9 @@ for (const item of hugeDataset) {
 
 `stream.write()` returns `false` when the internal buffer exceeds `highWaterMark`, signaling you should stop writing until the `drain` event.
 
-### Native solution: `stream.pipeline()`
+### Recommended: `stream.pipeline()`
 
-The cleanest way to handle backpressure is to model your data source as a readable stream and connect it to the writable via `pipeline`:
+**This is the right solution for most backpressure problems.** `pipeline` connects a readable source to a writable destination and handles backpressure, error propagation, and resource cleanup automatically:
 
 ```ts
 import { pipeline } from 'node:stream/promises'
@@ -189,11 +110,36 @@ await pipeline(
 )
 ```
 
-`pipeline` handles backpressure automatically — when the writable can't keep up, the readable pauses. It also propagates errors and cleans up resources. **This is the preferred approach when your data source is a stream or can be expressed as one.**
+When the file write can't keep up, the database stream automatically pauses. When it drains, the stream resumes. No manual buffering or drain handling needed.
 
-### butter-spread solution: `drainAwareWrite`
+Even if your data source isn't a stream, you can often wrap it:
 
-When you're writing data from a source that isn't naturally a stream — e.g., generating items in a computation loop, or interleaving writes with other side effects — `drainAwareWrite` handles the backpressure check for you:
+```ts
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+
+async function* generateRows() {
+    for (const table of tables) {
+        const rows = await fetchTableData(table)
+        for (const row of rows) {
+            yield JSON.stringify(row) + '\n'
+        }
+    }
+}
+
+await pipeline(
+    Readable.from(generateRows()),
+    fs.createWriteStream(outputPath),
+)
+```
+
+**Prefer `pipeline` whenever you can express your data source as a stream or async generator.** It is more efficient, handles errors correctly, and cleans up resources on failure.
+
+### With butter-spread: `drainAwareWrite`
+
+`drainAwareWrite` exists for a narrow case: when you're writing in an imperative loop and **cannot restructure as a pipeline** because you need to interleave writes with side effects that don't fit the stream model.
+
+For example, if you're writing data for multiple tables to the same file and need to update a manifest between tables:
 
 ```ts
 import { drainAwareWrite } from 'butter-spread'
@@ -204,17 +150,20 @@ for (const table of tables) {
     const rows = await fetchTableData(table)
     for (const row of rows) {
         const serialized = escapeJsonChars(JSON.stringify(Object.values(row))) + '\n'
-        // Waits for drain if buffer is full — prevents unbounded memory growth
         await drainAwareWrite(writeStream, serialized)
     }
+    // This side effect between tables breaks the pipeline model —
+    // you can't express "write rows, then update manifest, then write more rows"
+    // as a single Transform stream without awkward state management
+    await updateManifest(table, rows.length)
 }
 ```
 
-Note: if your data source is already a stream or async iterable, prefer `stream.pipeline()` instead — it handles backpressure natively and is more efficient.
+If you can restructure the above as a generator that yields serialized lines (moving the manifest update elsewhere), use `pipeline` instead. `drainAwareWrite` is the fallback when that restructuring isn't practical.
 
-## The problem: processing large streams in batches
+## Processing large streams in batches
 
-When consuming a stream item-by-item, each `await` yields to the event loop. This is safe but often inefficient — you'd rather accumulate items into batches for bulk operations (e.g., batch DB inserts):
+When consuming a stream item-by-item, each `await` yields to the event loop. This is safe but often inefficient — you'd rather accumulate items into batches for bulk operations:
 
 ```ts
 // Works, but inefficient: one DB call per line
@@ -223,7 +172,9 @@ for await (const line of readStream.pipe(split2())) {
 }
 ```
 
-### Native solution: manual accumulation
+### Recommended: manual batch accumulation
+
+This is simple and dependency-free:
 
 ```ts
 let batch = []
@@ -237,11 +188,18 @@ for await (const line of readStream.pipe(split2())) {
 if (batch.length > 0) await bulkInsert(batch)
 ```
 
-This works but is boilerplate that's easy to get wrong (forgetting the final flush, off-by-one on batch size).
+This is the right approach when:
+- The per-item transform is trivial (like `JSON.parse` on small objects)
+- You only batch in one or two places in your codebase
+- You don't need event-loop yielding during the sync transform (because it's fast)
 
-### butter-spread solution: `batchFromStream` + two-phase execution
+The `for await` already yields to the event loop between items, and the `await bulkInsert` yields between batches.
 
-`batchFromStream` extracts the accumulation logic into a composable async generator. Combined with `executeTwoPhaseChunksSequentially`, you get batched I/O with event-loop-safe sync transforms:
+### With butter-spread: `batchFromStream` + two-phase execution
+
+`batchFromStream` on its own is a thin convenience — it replaces the manual accumulation loop above with a reusable async generator. The value is modest: it eliminates the "don't forget to flush the final batch" bug and composes cleanly in a `for await` loop. If you batch in one place, the manual version is fine. If you batch in many places (e.g., restoring 10+ database tables from separate JSONL files), a shared primitive avoids repeating the accumulation logic.
+
+The real value appears when you combine it with `executeTwoPhaseChunksSequentially` and the per-item sync transform is expensive. In the manual approach, `JSON.parse` + `remapIds` running on 1000 items happens in a single synchronous `.map()` call. If `remapIds` involves regex replacements and UUID conversions on 1000 translation rows, that `.map()` can block for 20-50ms. The manual batch accumulation has no way to yield mid-batch.
 
 ```ts
 import { batchFromStream, executeTwoPhaseChunksSequentially } from 'butter-spread'
@@ -251,33 +209,116 @@ const lineStream = fs.createReadStream(filePath, { encoding: 'utf8' }).pipe(spli
 for await (const batch of batchFromStream(lineStream, 1000)) {
     await executeTwoPhaseChunksSequentially(batch, {
         syncTransform: (line) => {
-            // CPU-intensive: JSON parse + data transformation per line
             const parsed = JSON.parse(line)
             return remapIds(parsed, idMapping)
         },
         asyncPostProcess: async (transformedBatch) => {
-            // Single bulk insert for the accumulated batch
             return await bulkInsert(transformedBatch)
         },
     }, { id: 'restore-table' })
 }
 ```
 
-This gives you:
-- **Batched I/O**: fewer, larger DB calls instead of one per line
-- **Event-loop-safe sync transforms**: yields when the sync threshold is hit, so heavy transforms (regex, UUID conversion) don't block
-- **Natural backpressure**: the `for await` pauses the source stream when processing is slow
-- **Clean separation**: batching, sync processing, and async I/O are each handled by the right tool
+What this adds over the manual approach:
+- **Mid-batch yielding**: `executeTwoPhaseChunksSequentially` runs sync transforms one-by-one, flushes to the async post-processor when the time threshold is hit, and yields to the event loop. The manual `.map()` blocks until all 1000 items are transformed.
+- **Batched I/O with adaptive sizing**: the number of items flushed per async call depends on how fast the transforms run, not a fixed count. Fast transforms → larger batches → fewer DB round-trips.
+- **Warning logging**: alerts you when sync transforms take longer than expected.
 
-`batchFromStream` works with any `Iterable` or `AsyncIterable`, including Node.js readable streams, database cursors, and plain generators.
+If your per-item transform is cheap (simple property access, trivial parsing), the manual approach is better — it's simpler and the event loop isn't at risk.
 
-## When you don't need butter-spread
+## Sync transform followed by async I/O
 
-- **Purely async processing**: If every operation is `await`-ed (e.g., HTTP calls, DB queries with no sync transform), the event loop already yields between operations. Butter-spread adds no value.
-- **Small datasets**: If the total sync processing time is under ~10ms, chunking adds overhead for no benefit.
-- **Worker threads**: For truly CPU-heavy work (100ms+ per batch), consider [piscina](https://github.com/piscinajs/piscina) to offload to a worker thread instead of chunking on the main thread.
-- **Stream-to-stream transforms**: Use `stream.pipeline()` with Transform streams — it handles backpressure natively and is more efficient than imperative write loops.
-- **Trivial per-item transforms**: If your sync transform per item is fast (e.g., a simple property access), the stream's own async iteration already provides sufficient yielding.
+A common pattern: CPU-intensive transformation of each item, then a bulk async operation (database insert, API call).
+
+```ts
+for (const batch of batches) {
+    const transformed = batch.map((item) => cpuIntensiveTransform(item)) // sync, may block
+    await bulkInsert(transformed) // async, yields
+}
+```
+
+The `await` yields to the event loop, but only *after* the entire `.map()` completes. If the batch has thousands of items with heavy transforms, that `.map()` can block for 20-50ms.
+
+### Recommended: manual threshold-based flushing
+
+```ts
+async function processWithYielding(items, transformFn, insertFn, timeLimit) {
+    let pending = []
+    let start = Date.now()
+    for (const item of items) {
+        pending.push(transformFn(item))
+        if (Date.now() - start >= timeLimit) {
+            await insertFn(pending)
+            pending = []
+            start = Date.now()
+        }
+    }
+    if (pending.length > 0) await insertFn(pending)
+}
+```
+
+This is straightforward and works well for a one-off case. The async `insertFn` call naturally yields to the event loop.
+
+### With butter-spread: two-phase execution
+
+`executeTwoPhaseChunksSequentially` encapsulates the same flush-on-threshold pattern. For a single call site, it offers little over the manual version. The value is in two concrete situations:
+
+**Multiple two-phase pipelines with consistent behavior.** If you're restoring 10+ database tables, each with its own sync transform and bulk insert, the manual approach means 10 copies of the flushing logic with independently chosen thresholds. `executeTwoPhaseChunksSequentially` gives you one shared implementation with the same `ExecutionOptions` interface used across all call sites.
+
+**Production observability.** The built-in warning logging tells you when sync transforms are taking longer than expected, which processor triggered it, and how many items were in the batch. With the manual approach, you'd add this instrumentation yourself — and likely only after an incident.
+
+```ts
+import { executeTwoPhaseChunksSequentially } from 'butter-spread'
+
+const results = await executeTwoPhaseChunksSequentially(jsonlLines, {
+    syncTransform: (line) => {
+        const parsed = JSON.parse(line)
+        return remapIds(parsed, idMapping)
+    },
+    asyncPostProcess: async (batch) => {
+        return await db.insert(tableName).values(batch).returning()
+    },
+}, {
+    id: 'restore-translations',
+    executeSynchronouslyThresholdInMsecs: 15,
+    warningThresholdInMsecs: 30,
+})
+```
+
+If you have one or two pipelines and don't need warning logging, the manual version is simpler and has no dependency cost.
+
+## Mixed sync/async processing
+
+Sometimes a processor is synchronous for most inputs but needs to go async for others — e.g., a cache that hits memory for most lookups but falls back to a database.
+
+The straightforward approach is to always `await`:
+
+```ts
+for (const key of keys) {
+    results.push(await lookup(key)) // always yields, even on sync cache hits
+}
+```
+
+This is correct but yields to the event loop on every iteration, even when `lookup` returns synchronously. In a tight loop over thousands of keys where 95% are cache hits, the unnecessary yielding adds measurable overhead.
+
+`executeMixedChunksSequentially` detects whether each call returns a value or a Promise. Sync returns accumulate without yielding; async returns naturally yield and reset counters:
+
+```ts
+import { chunk, executeMixedChunksSequentially } from 'butter-spread'
+
+const chunks = chunk(keys, 50)
+const results = await executeMixedChunksSequentially(chunks, (keyBatch) => {
+    const allCached = keyBatch.every((key) => cache.has(key))
+    if (allCached) {
+        return keyBatch.map((key) => cache.get(key))
+    }
+    return fetchFromDatabase(keyBatch)
+}, {
+    id: 'cache-lookup',
+})
+```
+
+This only matters when the sync path is hot (many cache hits) and the loop is large. If most calls go async anyway, the always-`await` approach is simpler and the overhead difference is negligible.
 
 ## Further reading
 
