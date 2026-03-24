@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fastify } from 'fastify'
-// @ts-ignore
+// @ts-expect-error
 import nlp from 'node-nlp'
 import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest'
 import { executeTwoPhaseChunksSequentially } from '../src/butterSpread'
@@ -73,9 +73,9 @@ describe('executeTwoPhaseChunksSequentially', () => {
       input,
       {
         syncTransform: (n: number) => n * 10,
-        asyncPostProcess: async (batch: number[]) => {
+        asyncPostProcess: (batch: number[]) => {
           batchSizes.push(batch.length)
-          return batch.map((n) => n + 1)
+          return Promise.resolve(batch.map((n) => n + 1))
         },
       },
       {

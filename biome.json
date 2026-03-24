@@ -7,12 +7,10 @@
       "performance": {
         "noBarrelFile": "off"
       },
-      "style": {
-        "noVar": "off"
-      },
       "suspicious": {
         "noAssignInExpressions": "off",
-        "noConsoleLog": "off"
+        "noConsole": "off",
+        "noVar": "off"
       }
     }
   }
