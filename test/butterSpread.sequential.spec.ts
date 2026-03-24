@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fastify } from 'fastify'
-// @ts-ignore
+// @ts-expect-error
 import nlp from 'node-nlp'
 import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest'
 import { executeSyncChunksSequentially } from '../src/butterSpread'
