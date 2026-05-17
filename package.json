@@ -20,10 +20,10 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13"
   },
   "engineStrict": true,
-  "packageManager": "pnpm@11.1.1",
+  "packageManager": "pnpm@11.1.2",
   "scripts": {
     "build": "del-cli dist && del-cli coverage && tsc",
     "lint": "biome check . && tsc --project tsconfig.lint.json --noEmit",
