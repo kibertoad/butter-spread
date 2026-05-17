@@ -10,9 +10,13 @@ Note that you should also consider using worker threads; [piscina](https://githu
 
 If you have to run your app in an environment that only has a single core, your processing typically completes fast (but can sometimes spike), or you are searching for a simpler solution, look no further than this library!
 
+## Requirements
+
+Node.js `>= 22.13` (declared via `engines.node` with `engineStrict: true` — older versions will be rejected at install time).
+
 ## Node.js task queue consideration
 
-Each following chunk of work is added to the end of the event loop task queue after previous one is finished.
+Each following chunk of work is added to the end of the event loop task queue after the previous one is finished. The yielding primitive is [`setImmediate`](https://nodejs.org/api/timers.html#setimmediatecallback-args), which runs after pending I/O — not `process.nextTick` or `queueMicrotask`, which do not yield to I/O.
 
 This potentially increases latency of processing a single batch operation while improving throughput - all new work that was received after first chunk started processing will be completed before second chunk will be processed.
 
@@ -103,6 +107,8 @@ const results = await executeTwoPhaseChunksSequentially(chunks, {
 })
 ```
 
+Setting `executeSynchronouslyThresholdInMsecs: 0` flushes after every sync transform — useful when downstream ordering or backpressure dictates one-at-a-time processing. Output order across batches is preserved (each `asyncPostProcess` call is awaited before the next sync transform begins).
+
 ## Stream utilities
 
 ### batchFromStream
@@ -173,3 +179,9 @@ import { getSlicePreserveWords } from 'butter-spread'
 getSlicePreserveWords('hello world foo bar', 11) // 'hello world'
 getSlicePreserveWords('hello world foo bar', 11, 6) // 'world foo'
 ```
+
+The optional `startPos` argument is expected to coincide with a word boundary (for example, the offset returned as the end of a previous slice). If it lands mid-word, the returned slice will start mid-word too.
+
+## Logger
+
+`Logger` is a minimal `{ warn: LogFn }` shape, intentionally compatible with [pino](https://github.com/pinojs/pino) and similar structured loggers. The default `defaultLogger` exposes only `warn` (backed by `console.warn`) — the rest of `console` is not part of the surface area.

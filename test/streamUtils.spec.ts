@@ -156,4 +156,22 @@ describe('drainAwareWrite', () => {
 
     await expect(drainAwareWrite(writable, 'data')).rejects.toThrow(/Write failed/)
   })
+
+  it('rejects when stream closes mid-write without emitting error', async () => {
+    // Hold the write callback so the write stays "in flight", then emit 'close'
+    // directly. The cb-error path and the 'error' listener are both bypassed —
+    // only the 'close' safety net should settle the promise.
+    const writable = new Writable({
+      write(_chunk, _encoding, _callback) {
+        // intentionally never invoke callback
+      },
+    })
+
+    const writePromise = drainAwareWrite(writable, 'data')
+
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    writable.emit('close')
+
+    await expect(writePromise).rejects.toThrow(/Stream closed/)
+  })
 })
