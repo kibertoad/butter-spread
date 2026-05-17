@@ -25,9 +25,9 @@ jobs:
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
           echo "PR labels: $LABELS"
-          if echo "$LABELS" | grep -E -q '"(patch|minor|major)"'; then
+          if echo "$LABELS" | grep -E -q '"(patch|minor|major|skip-release)"'; then
             echo "Supported release label found."
             exit 0
           fi
-          echo "::error::PR must have one of the supported release labels: patch, minor, or major."
+          echo "::error::PR must have one of the supported release labels: patch, minor, major, or skip-release."
           exit 1
