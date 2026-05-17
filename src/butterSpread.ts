@@ -56,7 +56,11 @@ type ResolvedOptions = ExecutionOptions & {
 }
 
 function resolveOptions(options: ExecutionOptions): ResolvedOptions {
-  return { ...defaultExecutionOptions, ...options }
+  return {
+    ...defaultExecutionOptions,
+    ...options,
+    logger: options.logger ?? defaultExecutionOptions.logger,
+  }
 }
 
 function yieldToEventLoop(): Promise<void> {
