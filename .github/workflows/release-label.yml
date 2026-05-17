@@ -1,0 +1,33 @@
+---
+name: release-label
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - labeled
+      - unlabeled
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  check-label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Ensure supported release label is set
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          echo "PR labels: $LABELS"
+          if echo "$LABELS" | grep -E -q '"(patch|minor|major)"'; then
+            echo "Supported release label found."
+            exit 0
+          fi
+          echo "::error::PR must have one of the supported release labels: patch, minor, or major."
+          exit 1
