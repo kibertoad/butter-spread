@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Ensure supported release label is set
         env:
-          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           echo "PR labels: $LABELS"
           if echo "$LABELS" | grep -E -q '"(patch|minor|major|skip-release)"'; then

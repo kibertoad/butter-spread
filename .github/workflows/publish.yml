@@ -50,13 +50,15 @@ jobs:
 
       - name: Determine version bump
         id: version
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          if ${{ contains(github.event.pull_request.labels.*.name, 'major') }}; then
-            echo "bump=major" >> $GITHUB_OUTPUT
-          elif ${{ contains(github.event.pull_request.labels.*.name, 'minor') }}; then
-            echo "bump=minor" >> $GITHUB_OUTPUT
+          if echo "$LABELS" | grep -q '"major"'; then
+            echo "bump=major" >> "$GITHUB_OUTPUT"
+          elif echo "$LABELS" | grep -q '"minor"'; then
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
           else
-            echo "bump=patch" >> $GITHUB_OUTPUT
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Bump version
@@ -67,7 +69,7 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           NEW_VERSION=$(pnpm version "$VERSION_BUMP" -m "chore: release v%s")
-          echo "tag=${NEW_VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           REMOTE="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push "$REMOTE" "HEAD:${BASE_REF}"
           git push "$REMOTE" --tags
