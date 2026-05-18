@@ -224,6 +224,24 @@ describe('executeTwoPhaseChunksSequentially', () => {
     ).rejects.toThrow(/Sync broke/)
   })
 
+  it('handles asyncPostProcess returning a batch larger than V8 spread limit', async () => {
+    // V8's argument-count limit (~65535) would cause `results.push(...batchResults)`
+    // to throw RangeError. Regression test for the indexed-push fix.
+    const LARGE_SIZE = 70_000
+    const results = await executeTwoPhaseChunksSequentially(
+      [1],
+      {
+        syncTransform: (n: number) => n,
+        asyncPostProcess: async () => Array.from({ length: LARGE_SIZE }, (_, i) => i),
+      },
+      { id: 'large-batch' },
+    )
+
+    expect(results.length).toBe(LARGE_SIZE)
+    expect(results[0]).toBe(0)
+    expect(results[LARGE_SIZE - 1]).toBe(LARGE_SIZE - 1)
+  })
+
   it('throws an error if async post-process rejects', async () => {
     await expect(
       executeTwoPhaseChunksSequentially(

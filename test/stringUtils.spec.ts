@@ -44,6 +44,19 @@ describe('stringUtils', () => {
 
       expect(result).toEqual(['Mytextisthis.jpg'])
     })
+
+    it('collapses consecutive whitespace at split points', () => {
+      // Old behavior would emit 'foo ' (trailing space) for the first segment
+      const result = splitTextPreserveWords('foo  bar', 5)
+
+      expect(result).toEqual(['foo', 'bar'])
+    })
+
+    it('handles multiple consecutive spaces between words', () => {
+      const result = splitTextPreserveWords('foo   bar baz', 5)
+
+      expect(result).toEqual(['foo', 'bar', 'baz'])
+    })
   })
 
   describe('getSlicePreserveWords', () => {
@@ -117,6 +130,14 @@ describe('stringUtils', () => {
       const result = getSlicePreserveWords('Mytextisthis.jpg', 1)
 
       expect(result).toBe('Mytextisthis.jpg')
+    })
+
+    it('returns mid-word slice when startPos lands inside a word', () => {
+      // Documented precondition: startPos should coincide with a word boundary.
+      // When it doesn't, the slice starts mid-word (no attempt to snap forward).
+      const result = getSlicePreserveWords('hello world', 5, 3)
+
+      expect(result).toBe('lo')
     })
   })
 })
