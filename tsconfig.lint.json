@@ -1,9 +1,9 @@
 {
-    "extends": ["./tsconfig.json"],
-    "compilerOptions": {
-        "module": "ESNext",
-        "moduleResolution": "bundler"
-    },
-    "include": ["src/**/*", "test/**/*", "vitest.config.mts"],
-    "exclude": []
+  "extends": ["./tsconfig.json"],
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": ["index.ts", "src/**/*", "test/**/*", "vitest.config.mts"]
 }

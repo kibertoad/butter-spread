@@ -8,9 +8,20 @@ import type { Writable } from 'node:stream'
  * into {@link executeTwoPhaseChunksSequentially} or similar.
  *
  * @param source Any sync or async iterable.
- * @param batchSize Maximum items per yielded batch (must be >= 1).
+ * @param batchSize Maximum items per yielded batch. Must be an integer >= 1; anything
+ *   else throws a `RangeError` synchronously, before iteration starts.
  */
-export async function* batchFromStream<T>(
+export function batchFromStream<T>(
+  source: Iterable<T> | AsyncIterable<T>,
+  batchSize: number,
+): AsyncGenerator<T[]> {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError(`batchSize must be an integer >= 1, received ${String(batchSize)}`)
+  }
+  return batchGenerator(source, batchSize)
+}
+
+async function* batchGenerator<T>(
   source: Iterable<T> | AsyncIterable<T>,
   batchSize: number,
 ): AsyncGenerator<T[]> {
@@ -47,19 +58,27 @@ export function drainAwareWrite(stream: Writable, data: string | Buffer): Promis
     // an uninitialized `const` would throw a TDZ ReferenceError.
     let canContinue = true
 
+    const removeListeners = () => {
+      stream.removeListener('error', onError)
+      stream.removeListener('drain', onDrain)
+      stream.removeListener('close', onClose)
+    }
+
     const settle = (err?: Error | null) => {
       if (settled) return
       settled = true
-      // Defer listener removal to allow Node.js to emit the 'error' event
-      // that follows a failed write callback on the next tick
-      setImmediate(() => {
-        stream.removeListener('error', onError)
-        stream.removeListener('drain', onDrain)
-        stream.removeListener('close', onClose)
-      })
       if (err) {
+        // Defer listener removal to allow Node.js to emit the 'error' event that
+        // follows a failed write callback on the next tick, so it does not surface
+        // as an unhandled 'error' on the caller's stream.
+        setImmediate(removeListeners)
         reject(err)
       } else {
+        // Remove synchronously on success. A tight `await drainAwareWrite(...)` loop
+        // against a stream whose write callback completes on the same tick would
+        // otherwise stack up listeners faster than a deferred removal can clear
+        // them and trip MaxListenersExceededWarning.
+        removeListeners()
         resolve()
       }
     }

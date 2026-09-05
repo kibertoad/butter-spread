@@ -6,6 +6,7 @@ export type {
   TwoPhaseProcessor,
 } from './src/butterSpread'
 export {
+  defaultExecutionOptions,
   executeMixedChunksSequentially,
   executeSyncChunksSequentially,
   executeTwoPhaseChunksSequentially,

@@ -9,7 +9,6 @@ export default defineConfig({
     coverage: {
       include: ['src/*.ts'],
       reporter: ['text', 'lcov', 'html'],
-      all: true,
       thresholds: {
         statements: 100,
         branches: 90,

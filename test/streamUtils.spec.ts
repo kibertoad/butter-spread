@@ -81,6 +81,20 @@ describe('batchFromStream', () => {
     expect(batches).toEqual([])
   })
 
+  it.each([
+    ['zero', 0],
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['fractional', 1.5],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('throws synchronously for %s batchSize', (_label, batchSize) => {
+    function* generate() {
+      yield 1
+    }
+
+    expect(() => batchFromStream(generate(), batchSize)).toThrow(RangeError)
+  })
+
   it('works with a Node.js readable stream', async () => {
     const passThrough = new PassThrough({ objectMode: true })
 
@@ -133,6 +147,56 @@ describe('drainAwareWrite', () => {
     await drainAwareWrite(writable, largeData)
 
     expect(Buffer.concat(chunks).toString()).toBe(largeData)
+  })
+
+  it('removes its listeners as soon as a write succeeds', async () => {
+    // A PassThrough completes write callbacks on the same tick. Twenty awaited writes
+    // in a row used to stack twenty 'error'/'close' listeners (removal was deferred
+    // with setImmediate) and trip MaxListenersExceededWarning at the eleventh.
+    const sink = new PassThrough()
+    sink.resume()
+
+    for (let i = 0; i < 20; i++) {
+      await drainAwareWrite(sink, `line-${i}\n`)
+    }
+
+    expect(sink.listenerCount('error')).toBe(0)
+    expect(sink.listenerCount('close')).toBe(0)
+    expect(sink.listenerCount('drain')).toBe(0)
+  })
+
+  it('removes its listeners after waiting for drain', async () => {
+    const writable = new Writable({
+      highWaterMark: 1,
+      write(_chunk, _encoding, callback) {
+        setTimeout(callback, 5)
+      },
+    })
+
+    await drainAwareWrite(writable, 'x'.repeat(100))
+
+    expect(writable.listenerCount('error')).toBe(0)
+    expect(writable.listenerCount('close')).toBe(0)
+    expect(writable.listenerCount('drain')).toBe(0)
+  })
+
+  it('still handles the trailing error event Node emits after a failed write callback', async () => {
+    // After a failed write callback Node destroys the stream and emits 'error' on the
+    // next tick. drainAwareWrite defers removing its listener on the error path so that
+    // event is handled; had the listener been removed synchronously, the emit would
+    // surface as an uncaught exception and fail this run.
+    const writable = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error('Write failed'))
+      },
+    })
+
+    await expect(drainAwareWrite(writable, 'data')).rejects.toThrow(/Write failed/)
+
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(writable.errored).toBeInstanceOf(Error)
+    expect(writable.listenerCount('error')).toBe(0)
+    expect(writable.listenerCount('close')).toBe(0)
   })
 
   it('rejects when writing to a destroyed stream', async () => {

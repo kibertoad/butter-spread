@@ -18,14 +18,21 @@ jobs:
   check-label:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      pull-requests: read
     steps:
       - name: Ensure supported release label is set
         env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "PR labels: $LABELS"
-          if echo "$LABELS" | grep -E -q '"(patch|minor|major|skip-release)"'; then
+          # Read the labels from the API rather than from github.event, so that
+          # re-running this job after adding a label reflects the current state.
+          # A re-run replays the original webhook payload, which for the
+          # "opened" event of a PR labelled moments later still has no labels.
+          LABELS="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '.[].name')"
+          echo "PR labels: ${LABELS:-(none)}"
+          if grep -E -q '^(patch|minor|major|skip-release)$' <<< "$LABELS"; then
             echo "Supported release label found."
             exit 0
           fi

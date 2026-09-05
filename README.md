@@ -12,7 +12,9 @@ If you have to run your app in an environment that only has a single core, your 
 
 ## Requirements
 
-Node.js `>= 22.13` (declared via `engines.node` with `engineStrict: true` — older versions will be rejected at install time).
+Node.js `>= 22.13` (declared via `engines.node`; npm warns on older versions, pnpm with `engine-strict=true` rejects them).
+
+The package ships CommonJS with an `exports` map and type declarations; it can be `require`d or `import`ed from both CommonJS and ESM code.
 
 ## Node.js task queue consideration
 
@@ -53,13 +55,13 @@ const results = await executeSyncChunksSequentially(chunks, (chunk) => { return 
 })
 ```
 
+Both thresholds must be finite, non-negative numbers of milliseconds; anything else (negative, `NaN`, `Infinity`) rejects with a `RangeError` before any chunk is processed. `0` means "yield after every chunk" for `executeSynchronouslyThresholdInMsecs` and "never warn" for `warningThresholdInMsecs`. The defaults are exported as `defaultExecutionOptions`. Timing uses the monotonic `performance.now()` clock, so it is not affected by wall-clock adjustments.
+
 ### executeMixedChunksSequentially
 
-Processes chunks using a processor that can return either a value or a Promise. When the processor returns a Promise, the `await` naturally yields to the event loop, and threshold counters are reset. When it returns a value synchronously, the same threshold-based yielding as `executeSyncChunksSequentially` applies.
+Processes chunks using a processor that can return either a value or a Promise. Only the synchronous part of each call (the time until the processor returns) counts towards the thresholds: time spent awaiting a returned Promise does not block the event loop, so it is neither accumulated nor reported in warnings. Once the accumulated synchronous time reaches `executeSynchronouslyThresholdInMsecs`, the executor yields via `setImmediate`, whether the last chunk was sync or async.
 
-This is useful when some chunks require async operations (e.g. I/O) while others are purely computational.
-
-**Important:** The async path must perform real async work (I/O, `setTimeout`, `setImmediate`) that yields the event loop. `await Promise.resolve(value)` resolves as a microtask on the current tick and does **not** yield — the executor resets its time counter assuming the `await` yielded, but no yielding actually occurs. If your processor always returns synchronously-resolved promises (e.g. a cache that wraps results in `Promise.resolve()`), use `executeSyncChunksSequentially` instead and unwrap the cache synchronously.
+This is useful when some chunks require async operations (e.g. I/O) while others are purely computational. It is also safe for processors that return already-settled promises (`Promise.resolve(value)`, a cache wrapper): the executor never assumes that awaiting a Promise gave the event loop a turn, so such chunks still yield correctly once the threshold is hit.
 
 ```ts
 import { chunk, executeMixedChunksSequentially } from 'butter-spread'
@@ -84,7 +86,7 @@ Processes chunks in two explicit phases: a synchronous transform followed by an 
 
 This is ideal for pipelines where CPU-intensive transformation is followed by I/O — the sync transforms run back-to-back for efficiency, and the async step handles the accumulated batch (e.g. a single bulk insert instead of N individual inserts).
 
-`asyncPostProcess` receives the array of accumulated sync results and must return a Promise of an array of output values. The output array does not need to have the same length as the input — this allows filtering or expansion during post-processing.
+`asyncPostProcess` receives the array of accumulated sync results and must return a Promise of an array of output values. The output array does not need to have the same length as the input — this allows filtering or expansion during post-processing. Resolving to anything other than an array (most often a forgotten `return`) rejects with a descriptive `TypeError`.
 
 ```ts
 import { chunk, executeTwoPhaseChunksSequentially } from 'butter-spread'
@@ -113,7 +115,7 @@ Setting `executeSynchronouslyThresholdInMsecs: 0` flushes after every sync trans
 
 ### batchFromStream
 
-Accumulates items from any `Iterable` or `AsyncIterable` (including Node.js readable streams) into fixed-size batches. Useful for composing stream consumption with chunked processing.
+Accumulates items from any `Iterable` or `AsyncIterable` (including Node.js readable streams) into fixed-size batches. Useful for composing stream consumption with chunked processing. `batchSize` must be an integer `>= 1`; anything else throws a `RangeError` synchronously.
 
 Note: if your per-item processing is trivial (e.g. just an async DB call with no CPU work), plain `for await...of` already yields to the event loop and you don't need this utility. `batchFromStream` is valuable when you want to accumulate items for bulk operations or to feed into an executor like `executeTwoPhaseChunksSequentially`.
 
@@ -151,7 +153,7 @@ for (const item of largeDataset) {
 
 ### chunk
 
-Splits an array into fixed-size chunks.
+Splits an array into fixed-size chunks. Fractional sizes are truncated; a size below `1` (or `NaN`) returns `[]`.
 
 ```ts
 import { chunk } from 'butter-spread'
@@ -161,7 +163,7 @@ chunk([1, 2, 3, 4, 5], 2) // [[1, 2], [3, 4], [5]]
 
 ### splitTextPreserveWords
 
-Splits text into segments of a maximum length while preserving word boundaries.
+Splits text into segments of a maximum length while preserving word boundaries. Any whitespace (spaces, tabs, line breaks) counts as a boundary; segments never start or end with whitespace. Words longer than `maxLength` are emitted on their own rather than broken in half. `maxLength` must be a finite number `>= 1`, otherwise a `RangeError` is thrown.
 
 ```ts
 import { splitTextPreserveWords } from 'butter-spread'
@@ -177,10 +179,11 @@ Returns a single text slice from a starting position while preserving word bound
 import { getSlicePreserveWords } from 'butter-spread'
 
 getSlicePreserveWords('hello world foo bar', 11) // 'hello world'
+getSlicePreserveWords('hello world foo bar', 11, 5) // 'world foo' — startPos 5 is the space before 'world'
 getSlicePreserveWords('hello world foo bar', 11, 6) // 'world foo'
 ```
 
-The optional `startPos` argument is expected to coincide with a word boundary (for example, the offset returned as the end of a previous slice). If it lands mid-word, the returned slice will start mid-word too.
+Whitespace at the optional `startPos` is skipped, so it may point either at the first character of a word or at the whitespace before it. If it lands mid-word, the returned slice starts mid-word too. To iterate over a whole text, use `splitTextPreserveWords`. `sliceSize` must be a finite number `>= 1`, otherwise a `RangeError` is thrown.
 
 ## Logger
 

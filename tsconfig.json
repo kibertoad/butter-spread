@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "outDir": "dist",
-    "module": "CommonJS",
+    "module": "NodeNext",
     "target": "ES2022",
     "lib": ["ES2022"],
     "sourceMap": false,
@@ -10,7 +10,6 @@
     "types": ["node"],
     "strict": true,
     "skipLibCheck": true,
-    "moduleResolution": "node",
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
@@ -19,10 +18,7 @@
     "noImplicitThis": true,
     "strictNullChecks": true,
     "importHelpers": false,
-    "baseUrl": ".",
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": false,
     "forceConsistentCasingInFileNames": true
   },
-  "exclude": ["node_modules", "dist", "test", "vitest.config.ts"]
+  "include": ["index.ts", "src/**/*"]
 }
