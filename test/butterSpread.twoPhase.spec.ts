@@ -152,6 +152,35 @@ describe('executeTwoPhaseChunksSequentially', () => {
     expect(progressAtResponse).toBeLessThan(input.length)
   })
 
+  it('stays responsive when asyncPostProcess resolves without scheduling a task', async () => {
+    // An identity post-process resolves on the microtask queue, so `await` alone
+    // never hands control back to timers or I/O. The executor has to yield itself.
+    let calls = 0
+    const input = items(100)
+
+    const resultsPromise = executeTwoPhaseChunksSequentially(
+      input,
+      {
+        syncTransform: (n: number) => {
+          calls++
+          cpuBurn(2)
+          return n
+        },
+        asyncPostProcess: async (batch: number[]) => batch,
+      },
+      { id: 'TwoPhaseImmediate', executeSynchronouslyThresholdInMsecs: 0 },
+    )
+
+    const progressAtResponse = await requestDuringWorkload(
+      () => calls > 0,
+      () => calls,
+    )
+
+    const results = await resultsPromise
+    expect(results).toEqual(input)
+    expect(progressAtResponse).toBeLessThan(input.length)
+  })
+
   it('logs warning when sync phase exceeds threshold', async () => {
     const logger = spyLogger()
 

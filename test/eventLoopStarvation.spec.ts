@@ -144,6 +144,24 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
         }
       }, monitorOpts)
     })
+
+    it('does not starve the event loop when asyncPostProcess resolves immediately', async () => {
+      // An identity post-process resolves on the microtask queue: `await` on it
+      // never yields to timers or I/O, so the executor must yield itself between
+      // non-final batches.
+      await assertNoStarvation(async (ctx) => {
+        while (!ctx.stopped.value) {
+          await executeTwoPhaseChunksSequentially(
+            items,
+            {
+              syncTransform: cpuBurn,
+              asyncPostProcess: async (batch: number[]) => batch,
+            },
+            { id: 'starvation-twophase-immediate', executeSynchronouslyThresholdInMsecs: 0 },
+          )
+        }
+      }, monitorOpts)
+    })
   })
 })
 

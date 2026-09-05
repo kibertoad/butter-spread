@@ -76,6 +76,15 @@ describe('stringUtils', () => {
       expect(result).toEqual(['foo', 'bar'])
     })
 
+    it('trims trailing whitespace from the final segment that fits the limit', () => {
+      expect(splitTextPreserveWords('foo  ', 5)).toEqual(['foo'])
+      expect(splitTextPreserveWords('foo bar\t', 20)).toEqual(['foo bar'])
+    })
+
+    it('keeps a fitting remainder in one segment even when it contains whitespace', () => {
+      expect(splitTextPreserveWords('foo bar', 10)).toEqual(['foo bar'])
+    })
+
     it('returns empty array for empty input', () => {
       expect(splitTextPreserveWords('', 5)).toEqual([])
     })
@@ -178,6 +187,15 @@ describe('stringUtils', () => {
       const result = getSlicePreserveWords('foo\n\tbar baz', 3, 3)
 
       expect(result).toBe('bar')
+    })
+
+    it('trims trailing whitespace when the remainder fits the limit', () => {
+      expect(getSlicePreserveWords('foo  ', 5)).toBe('foo')
+      expect(getSlicePreserveWords('foo bar\n', 20)).toBe('foo bar')
+    })
+
+    it('returns empty string for whitespace-only input', () => {
+      expect(getSlicePreserveWords('   ', 5)).toBe('')
     })
 
     it('returns empty string when startPos is past the end of the text', () => {

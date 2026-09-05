@@ -241,12 +241,44 @@ export async function executeMixedChunksSequentially<InputChunk, OutputChunk>(
 }
 
 /**
+ * Validates one `asyncPostProcess` result and appends it to the accumulated output.
+ *
+ * @throws TypeError if `batchResults` is not an array (usually a forgotten `return`).
+ */
+function appendBatch<OutputChunk>(
+  results: OutputChunk[],
+  batchResults: OutputChunk[],
+  executionId: string,
+): void {
+  if (!Array.isArray(batchResults)) {
+    throw new TypeError(
+      `Execution "${executionId}": asyncPostProcess must resolve to an array, received ${
+        batchResults === null ? 'null' : typeof batchResults
+      }`,
+    )
+  }
+  // Append via indexed push instead of `results.push(...batchResults)`:
+  // spread would exceed V8's argument-count limit (~65535) for large async
+  // batches (RangeError), which the headline use case (bulk DB returning
+  // rows) can hit. Indexed push is safe at any size and keeps the result
+  // array PACKED — preallocation via `results.length = ...` would force a
+  // HOLEY transition that costs more in downstream iteration than it saves
+  // here. The ~1.3x overhead vs spread is negligible next to the I/O cost
+  // of `asyncPostProcess` itself.
+  const batchLen = batchResults.length
+  for (let i = 0; i < batchLen; i++) {
+    results.push(batchResults[i])
+  }
+}
+
+/**
  * Executes chunks in two explicit phases: a synchronous transform that accumulates
  * intermediates into a batch, followed by an async post-processing step (e.g. a bulk
  * database insert). Sync transforms run back-to-back until
  * `executeSynchronouslyThresholdInMsecs` is exceeded or the last chunk is reached,
- * then the accumulated batch is flushed to `asyncPostProcess`. The async phase
- * naturally yields the event loop and resets the burst counters.
+ * then the accumulated batch is flushed to `asyncPostProcess`. Each non-final flush
+ * yields the event loop and resets the burst counters, so an `asyncPostProcess` that
+ * resolves synchronously still lets timers and I/O run between batches.
  *
  * Setting `executeSynchronouslyThresholdInMsecs: 0` flushes after every sync transform
  * — useful when downstream ordering or backpressure dictates one-at-a-time processing.
@@ -290,31 +322,20 @@ export async function executeTwoPhaseChunksSequentially<InputChunk, Intermediate
 
     const isLastChunk = index === inputChunks.length - 1
     if (isLastChunk || timeTaken >= resolved.executeSynchronouslyThresholdInMsecs) {
-      const batchResults = await processor.asyncPostProcess(pendingIntermediates)
-      if (!Array.isArray(batchResults)) {
-        throw new TypeError(
-          `Execution "${resolved.id}": asyncPostProcess must resolve to an array, received ${
-            batchResults === null ? 'null' : typeof batchResults
-          }`,
-        )
-      }
-      // Append via indexed push instead of `results.push(...batchResults)`:
-      // spread would exceed V8's argument-count limit (~65535) for large async
-      // batches (RangeError), which the headline use case (bulk DB returning
-      // rows) can hit. Indexed push is safe at any size and keeps the result
-      // array PACKED — preallocation via `results.length = ...` would force a
-      // HOLEY transition that costs more in downstream iteration than it saves
-      // here. The ~1.3x overhead vs spread is negligible next to the I/O cost
-      // of `asyncPostProcess` itself.
-      const batchLen = batchResults.length
-      for (let i = 0; i < batchLen; i++) {
-        results.push(batchResults[i])
-      }
+      appendBatch(results, await processor.asyncPostProcess(pendingIntermediates), resolved.id)
 
       pendingIntermediates = []
       timeTaken = 0
       chunksProcessed = 0
       warned = false
+
+      // `asyncPostProcess` may resolve without ever scheduling a task (an identity
+      // or cache-hit implementation), in which case `await` above resumes as a
+      // microtask and the loop keeps hogging the current tick. Yield explicitly so
+      // timers and I/O get a turn between batches.
+      if (!isLastChunk) {
+        await yieldToEventLoop()
+      }
     }
   }
 

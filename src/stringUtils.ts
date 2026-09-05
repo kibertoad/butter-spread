@@ -20,7 +20,13 @@ function assertMaxLength(name: string, value: number): void {
 function findSegmentEnd(fullText: string, startPos: number, maxLength: number): number {
   const endPos = Math.min(startPos + Math.trunc(maxLength), fullText.length)
   if (endPos >= fullText.length) {
-    return endPos
+    // The remainder fits in one segment, so there is no boundary to search for —
+    // only trailing whitespace to trim off the end of the text.
+    let trimmedEnd = endPos
+    while (trimmedEnd > startPos && isWhitespaceAt(fullText, trimmedEnd - 1)) {
+      trimmedEnd--
+    }
+    return trimmedEnd
   }
 
   // Look for the last whitespace within the window (inclusive of `endPos`, since a
