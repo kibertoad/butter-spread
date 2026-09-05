@@ -16,12 +16,12 @@ import {
 import { drainAwareWrite } from '../src/streamUtils'
 
 /**
- * CPU-bound processor that blocks for ~2ms per call using Date.now() busy-wait.
- * Predictable duration regardless of machine speed.
+ * CPU-bound processor that blocks for ~2ms per call using a busy-wait on the
+ * monotonic clock. Predictable duration regardless of machine speed.
  */
 function cpuBurn(_item: number): number {
-  const end = Date.now() + 2
-  while (Date.now() < end) {
+  const end = performance.now() + 2
+  while (performance.now() < end) {
     /* busy */
   }
   return 0
@@ -49,6 +49,21 @@ const monitorOpts = {
 const STARVATION_TEST_TIMEOUT = 30_000
 
 describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST_TIMEOUT }, () => {
+  // The same raw workload every executor test runs, minus butter-spread. Proves the
+  // monitor thresholds actually discriminate; one run covers all three executors.
+  it('placebo: same workload without butter-spread starves the event loop', async () => {
+    const result = await withEventLoopMonitor(async (ctx) => {
+      while (!ctx.stopped.value) {
+        for (const item of items) {
+          cpuBurn(item)
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }, monitorOpts)
+
+    expect(result.passed).toBe(false)
+  })
+
   describe('executeSyncChunksSequentially', () => {
     it('does not starve the event loop', async () => {
       await assertNoStarvation(async (ctx) => {
@@ -73,19 +88,6 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
       expect(result.delaySamples.length).toBeGreaterThan(0)
       expect(result.utilizationSamples.length).toBeGreaterThan(0)
     })
-
-    it('placebo: same workload without butter-spread starves the event loop', async () => {
-      const result = await withEventLoopMonitor(async (ctx) => {
-        while (!ctx.stopped.value) {
-          for (const item of items) {
-            cpuBurn(item)
-          }
-          await new Promise<void>((resolve) => setImmediate(resolve))
-        }
-      }, monitorOpts)
-
-      expect(result.passed).toBe(false)
-    })
   })
 
   describe('executeMixedChunksSequentially', () => {
@@ -99,24 +101,28 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
       }, monitorOpts)
     })
 
-    // Note: mixed sync/async processor test is intentionally omitted.
-    // When the async path returns synchronously-resolved promises (Promise.resolve),
-    // the mixed executor resets its time counter (trusting the await yielded), but
-    // Promise.resolve() microtasks don't actually yield the event loop. With 500
-    // items at 2ms each, this blocks for the full 1000ms batch. This is a known
-    // edge case — real async operations (I/O, setTimeout) yield correctly.
-
-    it('placebo: same workload without butter-spread starves the event loop', async () => {
-      const result = await withEventLoopMonitor(async (ctx) => {
+    it('does not starve the event loop when processor returns already-settled promises', async () => {
+      // `await Promise.resolve(x)` never yields to I/O. The executor must keep
+      // accounting sync time across such chunks and yield via setImmediate itself.
+      await assertNoStarvation(async (ctx) => {
         while (!ctx.stopped.value) {
-          for (const item of items) {
-            cpuBurn(item)
-          }
-          await new Promise<void>((resolve) => setImmediate(resolve))
+          await executeMixedChunksSequentially(items, (item) => Promise.resolve(cpuBurn(item)), {
+            id: 'starvation-mixed-settled-promise',
+          })
         }
       }, monitorOpts)
+    })
 
-      expect(result.passed).toBe(false)
+    it('does not starve the event loop with alternating sync and async chunks', async () => {
+      await assertNoStarvation(async (ctx) => {
+        while (!ctx.stopped.value) {
+          await executeMixedChunksSequentially(
+            items,
+            (item) => (item % 2 === 0 ? cpuBurn(item) : Promise.resolve(cpuBurn(item))),
+            { id: 'starvation-mixed-alternating' },
+          )
+        }
+      }, monitorOpts)
     })
   })
 
@@ -137,19 +143,6 @@ describe('event loop starvation — memory-watchmen', { timeout: STARVATION_TEST
           )
         }
       }, monitorOpts)
-    })
-
-    it('placebo: same workload without butter-spread starves the event loop', async () => {
-      const result = await withEventLoopMonitor(async (ctx) => {
-        while (!ctx.stopped.value) {
-          for (const item of items) {
-            cpuBurn(item)
-          }
-          await new Promise<void>((resolve) => setImmediate(resolve))
-        }
-      }, monitorOpts)
-
-      expect(result.passed).toBe(false)
     })
   })
 })

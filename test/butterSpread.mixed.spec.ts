@@ -1,42 +1,19 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { fastify } from 'fastify'
-// @ts-expect-error
-import nlp from 'node-nlp'
-import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest'
+import { setTimeout as sleep } from 'node:timers/promises'
+import { afterEach, describe, expect, it, vitest } from 'vitest'
 import { executeMixedChunksSequentially } from '../src/butterSpread'
-import { defaultLogger } from '../src/logger'
-import { splitTextPreserveWords } from '../src/stringUtils'
+import { burningProcessor, cpuBurn, WARNING_MESSAGE } from './utils/cpuBurn'
+import { spyLogger } from './utils/logger'
+import { requestDuringWorkload } from './utils/responsiveness'
 
-let stemmer: any
-let sumTimeTaken: number
-let executionCounter: number
-const syncProcessor = (param: string) => {
-  const start = Date.now()
-  const result = stemmer.tokenizeAndStem(param)
-  sumTimeTaken += Date.now() - start
-  executionCounter++
-  return result
-}
-
-const text = readFileSync(resolve(__dirname, 'test.txt')).toString()
-const largeTextRaw = readFileSync(resolve(__dirname, 'largeTest.txt')).toString()
-const largeText = largeTextRaw + largeTextRaw + largeTextRaw + largeTextRaw + largeTextRaw
-const languageCode = 'en'
+const items = (count: number) => Array.from({ length: count }, (_, i) => i)
 
 describe('executeMixedChunksSequentially', () => {
-  let manager: any
-  beforeEach(() => {
-    manager = new nlp.NlpManager({ languages: [languageCode] })
-    stemmer = manager.container.get(`stemmer-${languageCode}`)
-  })
-
   afterEach(() => {
     vitest.restoreAllMocks()
   })
 
   it('returns empty output for empty input', async () => {
-    const results = await executeMixedChunksSequentially([], syncProcessor, {
+    const results = await executeMixedChunksSequentially([], burningProcessor(1).processor, {
       id: 'someId',
     })
 
@@ -44,188 +21,127 @@ describe('executeMixedChunksSequentially', () => {
   })
 
   it('processes all-sync processor correctly', async () => {
-    sumTimeTaken = 0
-    executionCounter = 0
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(text, 1000)
+    const logger = spyLogger()
+    const { processor } = burningProcessor(1)
 
-    const results = await executeMixedChunksSequentially(chunks, syncProcessor, {
-      id: 'Stemming',
-      logger: defaultLogger,
+    const results = await executeMixedChunksSequentially(items(20), processor, {
+      id: 'Mixed',
+      logger,
       warningThresholdInMsecs: 50,
     })
 
-    expect(results).toMatchSnapshot()
-    expect(loggingSpy.mock.calls.length).toBe(0)
+    expect(results).toEqual(items(20).map((i) => `processed-${i}`))
+    expect(logger.warn).not.toHaveBeenCalled()
   })
 
   it('processes all-async processor correctly', async () => {
-    const asyncProcessor = (param: string) => {
-      return Promise.resolve(stemmer.tokenizeAndStem(param))
-    }
+    const results = await executeMixedChunksSequentially(
+      items(20),
+      (chunk) => Promise.resolve(`processed-${chunk}`),
+      { id: 'Mixed', warningThresholdInMsecs: 50 },
+    )
 
-    const chunks = splitTextPreserveWords(text, 1000)
-
-    const results = await executeMixedChunksSequentially(chunks, asyncProcessor, {
-      id: 'Stemming',
-      logger: defaultLogger,
-      warningThresholdInMsecs: 50,
-    })
-
-    expect(results).toMatchSnapshot()
+    expect(results).toEqual(items(20).map((i) => `processed-${i}`))
   })
 
   it('processes mixed sync/async processor in correct order', async () => {
-    let callIndex = 0
-    const mixedProcessor = (param: string) => {
-      const idx = callIndex++
-      const result = stemmer.tokenizeAndStem(param)
-      // Every other chunk is async
-      if (idx % 2 === 1) {
-        return Promise.resolve(result)
-      }
-      return result
-    }
+    const results = await executeMixedChunksSequentially(
+      items(20),
+      (chunk) => {
+        cpuBurn(1)
+        // Every other chunk is async, with varying latency
+        if (chunk % 2 === 1) {
+          return sleep(chunk % 4 === 1 ? 5 : 1, `processed-${chunk}`)
+        }
+        return `processed-${chunk}`
+      },
+      { id: 'Mixed', warningThresholdInMsecs: 50 },
+    )
 
-    const chunks = splitTextPreserveWords(text, 1000)
-
-    const results = await executeMixedChunksSequentially(chunks, mixedProcessor, {
-      id: 'Stemming',
-      logger: defaultLogger,
-      warningThresholdInMsecs: 50,
-    })
-
-    // Compare with pure sync results to verify order is preserved
-    const syncResults = chunks.map((c) => stemmer.tokenizeAndStem(c))
-    expect(results).toEqual(syncResults)
+    expect(results).toEqual(items(20).map((i) => `processed-${i}`))
   })
 
   it('does not block event loop with sync chunks', async () => {
-    sumTimeTaken = 0
-    executionCounter = 0
-    const app = fastify()
-    app.route({
-      method: 'GET',
-      url: '/',
-      handler: (_req, res) => {
-        return res.send({})
-      },
-    })
+    const { processor, calls } = burningProcessor(2)
+    const input = items(100)
 
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(largeText, 50000)
-
-    const startTime = Date.now()
-    const resultsPromise = executeMixedChunksSequentially(chunks, syncProcessor, {
-      id: 'Stemming',
-      logger: defaultLogger,
+    const resultsPromise = executeMixedChunksSequentially(input, processor, {
+      id: 'Mixed',
       warningThresholdInMsecs: 50,
     })
-
-    await vitest.waitUntil(() => {
-      return executionCounter > 0
-    })
-    const response = await app.inject().get('/')
-    expect(response.statusCode).toBe(200)
-    const timeTaken = Date.now() - startTime
-
-    await resultsPromise
-    // check that request was processed before all of the operation chunks were completed
-    expect(sumTimeTaken > timeTaken).toBe(true)
-
-    expect(loggingSpy.mock.calls.length).toBe(0)
-    await app.close()
-  })
-
-  it('resets counters after async chunk (event loop stays responsive)', async () => {
-    executionCounter = 0
-    const app = fastify()
-    app.route({
-      method: 'GET',
-      url: '/',
-      handler: (_req, res) => {
-        return res.send({})
-      },
-    })
-
-    // Processor that returns promises for every other chunk
-    const mixedProcessor = (param: string) => {
-      const result = stemmer.tokenizeAndStem(param)
-      executionCounter++
-      if (executionCounter % 2 === 0) {
-        return Promise.resolve(result)
-      }
-      return result
-    }
-
-    const chunks = splitTextPreserveWords(largeText, 50000)
-
-    const resultsPromise = executeMixedChunksSequentially(chunks, mixedProcessor, {
-      id: 'Stemming',
-      logger: defaultLogger,
-      warningThresholdInMsecs: 50,
-    })
-
-    await vitest.waitUntil(() => {
-      return executionCounter > 0
-    })
-    // Event loop is responsive during mixed processing — HTTP request completes
-    const response = await app.inject().get('/')
-    expect(response.statusCode).toBe(200)
+    const progressAtResponse = await requestDuringWorkload(() => calls() > 0, calls)
 
     const results = await resultsPromise
-    expect(results.length).toBe(chunks.length)
-    await app.close()
+    expect(results.length).toBe(input.length)
+    expect(progressAtResponse).toBeLessThan(input.length)
+  })
+
+  it('does not block event loop when processor returns already-settled promises', async () => {
+    // `await Promise.resolve(x)` only takes a microtask turn and never lets I/O run.
+    // The executor must not treat that await as a yield: sync time still accumulates
+    // and forces a real setImmediate yield once the threshold is reached.
+    let calls = 0
+    const input = items(100)
+
+    const resultsPromise = executeMixedChunksSequentially(
+      input,
+      (chunk) => {
+        calls++
+        cpuBurn(2)
+        return Promise.resolve(`processed-${chunk}`)
+      },
+      { id: 'Mixed', warningThresholdInMsecs: 50 },
+    )
+    const progressAtResponse = await requestDuringWorkload(
+      () => calls > 0,
+      () => calls,
+    )
+
+    const results = await resultsPromise
+    expect(results).toEqual(input.map((i) => `processed-${i}`))
+    expect(progressAtResponse).toBeLessThan(input.length)
+  })
+
+  it('does not count time spent awaiting async results towards the thresholds', async () => {
+    const logger = spyLogger()
+
+    await executeMixedChunksSequentially(items(5), () => sleep(20, 'x'), {
+      id: 'Mixed',
+      logger,
+      // Each chunk waits 20ms on I/O but does no sync work, so no warning is due
+      warningThresholdInMsecs: 5,
+    })
+
+    expect(logger.warn).not.toHaveBeenCalled()
   })
 
   it('logs warning when threshold is exceeded with sync processor', async () => {
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(text, 1000000000)
+    const logger = spyLogger()
 
-    let now = 0
-    const dateNowSpy = vitest.spyOn(Date, 'now')
-    dateNowSpy.mockImplementation(() => {
-      // Each call advances time by 100ms, guaranteeing threshold is exceeded
-      return (now += 100)
-    })
-
-    await executeMixedChunksSequentially(chunks, syncProcessor, {
-      id: 'Stemming',
-      logger: defaultLogger,
+    await executeMixedChunksSequentially(['a'], () => cpuBurn(5), {
+      id: 'Mixed',
+      logger,
       warningThresholdInMsecs: 1,
     })
 
-    expect(loggingSpy.mock.calls.length).toBe(1)
-    expect(loggingSpy.mock.calls[0][0]).toMatch(
-      /^Execution "Stemming" has exceeded the threshold, took (\d+) msecs for a single iteration. (\d+) chunks were processed. Last chunk took (\d+) msecs for (\d+) elements.$/,
-    )
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    expect(logger.warn.mock.calls[0][0]).toMatch(WARNING_MESSAGE)
   })
 
-  it('logs warning when threshold is exceeded with async processor', async () => {
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(text, 1000000000)
+  it('logs warning for the synchronous part of an async processor', async () => {
+    const logger = spyLogger()
 
-    const asyncProcessor = (param: string) => {
-      return Promise.resolve(stemmer.tokenizeAndStem(param))
-    }
-
-    let now = 0
-    const dateNowSpy = vitest.spyOn(Date, 'now')
-    dateNowSpy.mockImplementation(() => {
-      // Each call advances time by 100ms, guaranteeing threshold is exceeded
-      return (now += 100)
-    })
-
-    await executeMixedChunksSequentially(chunks, asyncProcessor, {
-      id: 'Stemming',
-      logger: defaultLogger,
-      warningThresholdInMsecs: 1,
-    })
-
-    expect(loggingSpy.mock.calls.length).toBe(1)
-    expect(loggingSpy.mock.calls[0][0]).toMatch(
-      /^Execution "Stemming" has exceeded the threshold, took (\d+) msecs for a single iteration. (\d+) chunks were processed. Last chunk took (\d+) msecs for (\d+) elements.$/,
+    await executeMixedChunksSequentially(
+      ['a'],
+      () => {
+        cpuBurn(5)
+        return Promise.resolve('x')
+      },
+      { id: 'Mixed', logger, warningThresholdInMsecs: 1 },
     )
+
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    expect(logger.warn.mock.calls[0][0]).toMatch(WARNING_MESSAGE)
   })
 
   it('throws an error if sync processor breaks', async () => {
@@ -235,28 +151,41 @@ describe('executeMixedChunksSequentially', () => {
         () => {
           throw new Error('It broke down')
         },
-        {
-          id: 'Stemming',
-          logger: defaultLogger,
-          warningThresholdInMsecs: 1,
-        },
+        { id: 'Mixed', warningThresholdInMsecs: 1 },
       ),
     ).rejects.toThrow(/It broke down/)
   })
 
   it('throws an error if async processor rejects', async () => {
     await expect(
-      executeMixedChunksSequentially(
-        ['a', 'b'],
-        () => {
-          return Promise.reject(new Error('Async failure'))
-        },
-        {
-          id: 'Stemming',
-          logger: defaultLogger,
-          warningThresholdInMsecs: 1,
-        },
-      ),
+      executeMixedChunksSequentially(['a', 'b'], () => Promise.reject(new Error('Async failure')), {
+        id: 'Mixed',
+        warningThresholdInMsecs: 1,
+      }),
     ).rejects.toThrow(/Async failure/)
+  })
+
+  it('propagates rejections from custom thenables', async () => {
+    const thenable = {
+      // biome-ignore lint/suspicious/noThenProperty: a thenable is exactly what this test exercises
+      then(_resolve: (value: string) => void, reject: (reason: Error) => void) {
+        reject(new Error('custom thenable'))
+      },
+    }
+
+    await expect(
+      executeMixedChunksSequentially([1], () => thenable as unknown as Promise<string>, {
+        id: 'Mixed',
+      }),
+    ).rejects.toThrow(/custom thenable/)
+  })
+
+  it('rejects invalid threshold options', async () => {
+    await expect(
+      executeMixedChunksSequentially([1], (x) => x, {
+        id: 'invalid',
+        executeSynchronouslyThresholdInMsecs: Number.NaN,
+      }),
+    ).rejects.toThrow(RangeError)
   })
 })

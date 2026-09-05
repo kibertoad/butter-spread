@@ -27,6 +27,20 @@ describe('chunk', () => {
     expect(result).toEqual([])
   })
 
+  it('truncates a fractional chunk size', () => {
+    const result = chunk([1, 2, 3, 4, 5], 2.7)
+    expect(result).toEqual([[1, 2], [3, 4], [5]])
+  })
+
+  it('returns empty array for NaN chunk size', () => {
+    expect(chunk([1, 2, 3], Number.NaN)).toEqual([])
+  })
+
+  it('accepts a readonly array', () => {
+    const input: readonly number[] = [1, 2, 3]
+    expect(chunk(input, 2)).toEqual([[1, 2], [3]])
+  })
+
   it('returns chunked array', () => {
     const result = chunk([1, 2, 3, 4, 5, 6, 7], 5)
     expect(result).toEqual([

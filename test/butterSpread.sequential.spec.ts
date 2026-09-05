@@ -1,56 +1,32 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { fastify } from 'fastify'
-// @ts-expect-error
-import nlp from 'node-nlp'
-import { afterEach, beforeEach, describe, expect, it, vitest } from 'vitest'
+import { afterEach, describe, expect, it, vitest } from 'vitest'
 import { executeSyncChunksSequentially } from '../src/butterSpread'
-import { defaultLogger } from '../src/logger'
-import { splitTextPreserveWords } from '../src/stringUtils'
+import { burningProcessor, cpuBurn, WARNING_MESSAGE } from './utils/cpuBurn'
+import { spyLogger } from './utils/logger'
+import { requestDuringWorkload } from './utils/responsiveness'
 
-let stemmer: any
-let sumTimeTaken: number
-let executionCounter: number
-const processor = (param: string) => {
-  console.log('start processing an entry')
-  const start = Date.now()
-  const result = stemmer.tokenizeAndStem(param)
-  sumTimeTaken += Date.now() - start
-  executionCounter++
+const items = (count: number) => Array.from({ length: count }, (_, i) => i)
 
-  return result
-}
-const text = readFileSync(resolve(__dirname, 'test.txt')).toString()
-const largeTextRaw = readFileSync(resolve(__dirname, 'largeTest.txt')).toString()
-const largeText = largeTextRaw + largeTextRaw + largeTextRaw + largeTextRaw + largeTextRaw
-const languageCode = 'en'
-
-describe('butterSpread', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let manager: any
-  beforeEach(() => {
-    manager = new nlp.NlpManager({ languages: [languageCode] })
-    stemmer = manager.container.get(`stemmer-${languageCode}`)
+describe('executeSyncChunksSequentially', () => {
+  afterEach(() => {
+    vitest.restoreAllMocks()
   })
 
-  afterEach(() => {})
+  it('returns results in input order without warnings when threshold is not exceeded', async () => {
+    const logger = spyLogger()
+    const { processor } = burningProcessor(1)
 
-  it('does not log warning when threshold is not exceeded', async () => {
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(text, 1000)
-
-    const results = await executeSyncChunksSequentially(chunks, processor, {
-      id: 'Stemming',
-      logger: defaultLogger,
+    const results = await executeSyncChunksSequentially(items(20), processor, {
+      id: 'Burn',
+      logger,
       warningThresholdInMsecs: 50,
     })
 
-    expect(results).toMatchSnapshot()
-    expect(loggingSpy.mock.calls.length).toBe(0)
+    expect(results).toEqual(items(20).map((i) => `processed-${i}`))
+    expect(logger.warn).not.toHaveBeenCalled()
   })
 
   it('returns empty output for empty input', async () => {
-    const results = await executeSyncChunksSequentially([], processor, {
+    const results = await executeSyncChunksSequentially([], burningProcessor(1).processor, {
       id: 'someId',
     })
 
@@ -58,96 +34,105 @@ describe('butterSpread', () => {
   })
 
   it('does not block event loop', async () => {
-    sumTimeTaken = 0
-    executionCounter = 0
-    const app = fastify()
-    app.route({
-      method: 'GET',
-      url: '/',
-      handler: (_req, res) => {
-        return res.send({})
-      },
-    })
+    const { processor, calls } = burningProcessor(2)
+    const input = items(100)
 
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(largeText, 50000)
-
-    const startTime = Date.now()
-    const resultsPromise = executeSyncChunksSequentially(chunks, processor, {
-      id: 'Stemming',
-      logger: defaultLogger,
+    const resultsPromise = executeSyncChunksSequentially(input, processor, {
+      id: 'Burn',
       warningThresholdInMsecs: 50,
     })
+    const progressAtResponse = await requestDuringWorkload(() => calls() > 0, calls)
 
-    await vitest.waitUntil(() => {
-      return executionCounter > 0
-    })
-    const response = await app.inject().get('/')
-    console.log('received response')
-    expect(response.statusCode).toBe(200)
-    const timeTaken = Date.now() - startTime
-
-    await resultsPromise
-    // check that request was processed before all of the operation chunks were completed
-    expect(sumTimeTaken > timeTaken).toBe(true)
-
-    expect(loggingSpy.mock.calls.length).toBe(0)
-    await app.close()
+    const results = await resultsPromise
+    expect(results.length).toBe(input.length)
+    // The request was served before the whole workload completed
+    expect(progressAtResponse).toBeLessThan(input.length)
   })
 
   it('processes synchronously within a given timeframe', async () => {
-    sumTimeTaken = 0
-    executionCounter = 0
-    const app = fastify()
-    app.route({
-      method: 'GET',
-      url: '/',
-      handler: (_req, res) => {
-        return res.send({})
-      },
-    })
+    const { processor, calls } = burningProcessor(2)
+    const input = items(50)
 
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(largeText, 50000)
-
-    const startTime = Date.now()
-    const resultsPromise = executeSyncChunksSequentially(chunks, processor, {
-      id: 'Stemming',
-      logger: defaultLogger,
+    const resultsPromise = executeSyncChunksSequentially(input, processor, {
+      id: 'Burn',
       warningThresholdInMsecs: 1000,
       executeSynchronouslyThresholdInMsecs: 500,
     })
-
-    await vitest.waitUntil(() => {
-      return executionCounter > 0
-    })
-    const response = await app.inject().get('/')
-    console.log('received response')
-    expect(response.statusCode).toBe(200)
-    const timeTaken = Date.now() - startTime
+    const progressAtResponse = await requestDuringWorkload(() => calls() > 0, calls)
 
     await resultsPromise
-    // check that request was processed before all of the operation chunks were completed
-    expect(sumTimeTaken > timeTaken).toBe(false)
-
-    expect(loggingSpy.mock.calls.length).toBe(0)
-    await app.close()
+    // The whole workload (~100ms) fits inside the 500ms sync window, so no yield
+    // happened and the request could only be served once everything was done
+    expect(progressAtResponse).toBe(input.length)
   })
 
   it('logs warning when threshold is exceeded', async () => {
-    const loggingSpy = vitest.spyOn(console, 'warn')
-    const chunks = splitTextPreserveWords(text, 1000000000)
+    const logger = spyLogger()
 
-    await executeSyncChunksSequentially(chunks, processor, {
-      id: 'Stemming',
-      logger: defaultLogger,
+    await executeSyncChunksSequentially([[1, 2, 3]], () => cpuBurn(5), {
+      id: 'Burn',
+      logger,
       warningThresholdInMsecs: 1,
     })
 
-    expect(loggingSpy.mock.calls.length).toBe(1)
-    expect(loggingSpy.mock.calls[0][0]).toMatch(
-      /^Execution "Stemming" has exceeded the threshold, took (\d+) msecs for a single iteration. (\d+) chunks were processed. Last chunk took (\d+) msecs for (\d+) elements.$/,
-    )
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+    const message = logger.warn.mock.calls[0][0] as string
+    expect(message).toMatch(WARNING_MESSAGE)
+    expect(message).toContain('Execution "Burn"')
+    expect(message).toContain('1 chunks were processed')
+    expect(message).toContain('for 3 elements')
+  })
+
+  it('falls back to console.warn when no logger is provided', async () => {
+    const consoleSpy = vitest.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await executeSyncChunksSequentially([1], () => cpuBurn(5), {
+      id: 'Burn',
+      warningThresholdInMsecs: 1,
+    })
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1)
+    expect(consoleSpy.mock.calls[0][0]).toMatch(WARNING_MESSAGE)
+  })
+
+  it('emits at most one warning per synchronous burst', async () => {
+    const logger = spyLogger()
+
+    await executeSyncChunksSequentially(items(5), () => cpuBurn(2), {
+      id: 'Burn',
+      logger,
+      warningThresholdInMsecs: 1,
+      // No yield happens, so all five chunks form a single burst
+      executeSynchronouslyThresholdInMsecs: 10_000,
+    })
+
+    expect(logger.warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('resets the warning latch after yielding', async () => {
+    const logger = spyLogger()
+
+    await executeSyncChunksSequentially(items(3), () => cpuBurn(2), {
+      id: 'Burn',
+      logger,
+      warningThresholdInMsecs: 1,
+      // Yield after every chunk, so each chunk is its own burst
+      executeSynchronouslyThresholdInMsecs: 0,
+    })
+
+    expect(logger.warn).toHaveBeenCalledTimes(3)
+  })
+
+  it('disables warnings when warningThresholdInMsecs is 0', async () => {
+    const logger = spyLogger()
+
+    await executeSyncChunksSequentially([1], () => cpuBurn(5), {
+      id: 'Burn',
+      logger,
+      warningThresholdInMsecs: 0,
+    })
+
+    expect(logger.warn).not.toHaveBeenCalled()
   })
 
   it('throws an error if something breaks', async () => {
@@ -157,12 +142,43 @@ describe('butterSpread', () => {
         () => {
           throw new Error('It broke down')
         },
-        {
-          id: 'Stemming',
-          logger: defaultLogger,
-          warningThresholdInMsecs: 1,
-        },
+        { id: 'Burn', warningThresholdInMsecs: 1 },
       ),
     ).rejects.toThrow(/It broke down/)
+  })
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['negative', -1],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('rejects %s executeSynchronouslyThresholdInMsecs', async (_label, value) => {
+    await expect(
+      executeSyncChunksSequentially([1], (x) => x, {
+        id: 'invalid',
+        executeSynchronouslyThresholdInMsecs: value,
+      }),
+    ).rejects.toThrow(RangeError)
+  })
+
+  it.each([
+    ['NaN', Number.NaN],
+    ['negative', -1],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('rejects %s warningThresholdInMsecs', async (_label, value) => {
+    await expect(
+      executeSyncChunksSequentially([1], (x) => x, {
+        id: 'invalid',
+        warningThresholdInMsecs: value,
+      }),
+    ).rejects.toThrow(/warningThresholdInMsecs must be a finite, non-negative number/)
+  })
+
+  it('validates options even for empty input', async () => {
+    await expect(
+      executeSyncChunksSequentially([], (x) => x, {
+        id: 'invalid',
+        executeSynchronouslyThresholdInMsecs: -5,
+      }),
+    ).rejects.toThrow(RangeError)
   })
 })

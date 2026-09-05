@@ -31,36 +31,66 @@ export type ExecutionOptions = {
   /**
    * Upper bound (in milliseconds) on a single synchronous burst before the executor
    * yields to the event loop via `setImmediate`. Set to `0` to yield after every
-   * chunk. Defaults to `15`.
+   * chunk. Must be a finite, non-negative number. Defaults to `15`.
    */
   executeSynchronouslyThresholdInMsecs?: number
   /**
    * When a synchronous burst exceeds this threshold (in milliseconds), the executor
    * emits one warning per burst describing the slowdown. Set to `0` to disable.
-   * Defaults to `30`.
+   * Must be a finite, non-negative number. Defaults to `30`.
    */
   warningThresholdInMsecs?: number
   /** Logger to receive warnings. Defaults to `defaultLogger` (which calls `console.warn`). */
   logger?: Logger
 }
 
+/** Default values applied to {@link ExecutionOptions} fields that are left undefined. */
 export const defaultExecutionOptions = {
   warningThresholdInMsecs: 30,
   executeSynchronouslyThresholdInMsecs: 15,
   logger: defaultLogger,
 } as const
 
-type ResolvedOptions = ExecutionOptions & {
+type ResolvedOptions = {
+  id: string
   logger: Logger
   executeSynchronouslyThresholdInMsecs: number
+  warningThresholdInMsecs: number
+}
+
+function assertThreshold(name: string, value: number): void {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new RangeError(
+      `${name} must be a finite, non-negative number of milliseconds, received ${String(value)}`,
+    )
+  }
 }
 
 function resolveOptions(options: ExecutionOptions): ResolvedOptions {
-  return {
-    ...defaultExecutionOptions,
-    ...options,
+  const resolved: ResolvedOptions = {
+    id: options.id,
     logger: options.logger ?? defaultExecutionOptions.logger,
+    executeSynchronouslyThresholdInMsecs:
+      options.executeSynchronouslyThresholdInMsecs ??
+      defaultExecutionOptions.executeSynchronouslyThresholdInMsecs,
+    warningThresholdInMsecs:
+      options.warningThresholdInMsecs ?? defaultExecutionOptions.warningThresholdInMsecs,
   }
+  assertThreshold(
+    'executeSynchronouslyThresholdInMsecs',
+    resolved.executeSynchronouslyThresholdInMsecs,
+  )
+  assertThreshold('warningThresholdInMsecs', resolved.warningThresholdInMsecs)
+  return resolved
+}
+
+/**
+ * Monotonic, sub-millisecond clock. `Date.now()` is wall-clock time: it has 1 ms
+ * resolution (so sub-millisecond chunks would count as taking zero time) and can
+ * jump backwards on clock adjustments, which would delay yielding.
+ */
+function now(): number {
+  return performance.now()
 }
 
 function yieldToEventLoop(): Promise<void> {
@@ -81,11 +111,11 @@ function maybeWarn(
   chunk: unknown,
 ): boolean {
   if (alreadyWarned) return true
-  if (!options.warningThresholdInMsecs) return false
+  if (options.warningThresholdInMsecs === 0) return false
   if (timeTaken < options.warningThresholdInMsecs) return false
   const length = Array.isArray(chunk) || typeof chunk === 'string' ? chunk.length : 1
   options.logger.warn(
-    `Execution "${options.id}" has exceeded the threshold, took ${timeTaken} msecs for a single iteration. ${chunksProcessed} chunks were processed. Last chunk took ${chunkTimeTaken} msecs for ${length} elements.`,
+    `Execution "${options.id}" has exceeded the threshold, took ${Math.round(timeTaken)} msecs for a single iteration. ${chunksProcessed} chunks were processed. Last chunk took ${Math.round(chunkTimeTaken)} msecs for ${length} elements.`,
   )
   return true
 }
@@ -103,11 +133,11 @@ export async function executeSyncChunksSequentially<InputChunk, OutputChunk>(
   processor: SyncProcessor<InputChunk, OutputChunk>,
   options: ExecutionOptions,
 ): Promise<OutputChunk[]> {
+  const resolved = resolveOptions(options)
   if (inputChunks.length === 0) {
     return []
   }
 
-  const resolved = resolveOptions(options)
   const results: OutputChunk[] = []
 
   // Initial yield so callers see consistent async behavior regardless of input size
@@ -119,9 +149,9 @@ export async function executeSyncChunksSequentially<InputChunk, OutputChunk>(
 
   for (let index = 0; index < inputChunks.length; index++) {
     const chunk = inputChunks[index]
-    const chunkStartTime = Date.now()
+    const chunkStartTime = now()
     const chunkResult = processor(chunk)
-    const chunkTimeTaken = Date.now() - chunkStartTime
+    const chunkTimeTaken = now() - chunkStartTime
 
     results.push(chunkResult)
     timeTaken += chunkTimeTaken
@@ -145,28 +175,26 @@ export async function executeSyncChunksSequentially<InputChunk, OutputChunk>(
 
 /**
  * Executes chunks through a processor that may return either a value or a Promise.
- * When the processor returns a Promise, awaiting it naturally yields the event loop
- * and resets the executor's burst counters. When it returns a value, the same
- * threshold-based yielding as {@link executeSyncChunksSequentially} applies.
  *
- * **Important:** the async path must perform real async work (I/O, `setTimeout`,
- * `setImmediate`) that actually yields the event loop. `await Promise.resolve(x)`
- * resolves as a microtask on the current tick and does not yield — this executor
- * resets its counter assuming the await yielded, but no yielding actually occurs.
- * If your processor always returns synchronously-resolved promises (e.g. a cache
- * that wraps results in `Promise.resolve()`), use {@link executeSyncChunksSequentially}
- * and unwrap the cache synchronously instead.
+ * Only the synchronous part of each call (the time until `processor` returns) counts
+ * towards the burst thresholds: time spent waiting on a returned Promise does not
+ * block the event loop, so it is neither accumulated nor reported in warnings. Once
+ * the accumulated synchronous time reaches `executeSynchronouslyThresholdInMsecs`
+ * the executor yields via `setImmediate`, regardless of whether the last chunk was
+ * sync or async. This means a processor that returns already-settled promises
+ * (`Promise.resolve(x)`, a cache wrapper) still yields correctly; the executor never
+ * assumes that awaiting a Promise gave the event loop a turn.
  */
 export async function executeMixedChunksSequentially<InputChunk, OutputChunk>(
   inputChunks: readonly InputChunk[],
   processor: MixedProcessor<InputChunk, OutputChunk>,
   options: ExecutionOptions,
 ): Promise<OutputChunk[]> {
+  const resolved = resolveOptions(options)
   if (inputChunks.length === 0) {
     return []
   }
 
-  const resolved = resolveOptions(options)
   const results: OutputChunk[] = []
 
   await yieldToEventLoop()
@@ -177,8 +205,10 @@ export async function executeMixedChunksSequentially<InputChunk, OutputChunk>(
 
   for (let index = 0; index < inputChunks.length; index++) {
     const chunk = inputChunks[index]
-    const chunkStartTime = Date.now()
+    const chunkStartTime = now()
     const rawResult = processor(chunk)
+    // Measure only the synchronous portion; awaiting I/O does not block the loop
+    const chunkTimeTaken = now() - chunkStartTime
 
     // Duck-type thenable check (handles cross-realm promises and custom thenables)
     const isThenable =
@@ -189,7 +219,6 @@ export async function executeMixedChunksSequentially<InputChunk, OutputChunk>(
     const chunkResult: OutputChunk = isThenable
       ? await (rawResult as Promise<OutputChunk>)
       : (rawResult as OutputChunk)
-    const chunkTimeTaken = Date.now() - chunkStartTime
 
     results.push(chunkResult)
     timeTaken += chunkTimeTaken
@@ -197,12 +226,7 @@ export async function executeMixedChunksSequentially<InputChunk, OutputChunk>(
 
     warned = maybeWarn(resolved, warned, timeTaken, chunkTimeTaken, chunksProcessed, chunk)
 
-    if (isThenable) {
-      // The await already yielded the event loop, reset counters
-      timeTaken = 0
-      chunksProcessed = 0
-      warned = false
-    } else if (
+    if (
       index < inputChunks.length - 1 &&
       timeTaken >= resolved.executeSynchronouslyThresholdInMsecs
     ) {
@@ -230,18 +254,19 @@ export async function executeMixedChunksSequentially<InputChunk, OutputChunk>(
  * before the next sync transform begins).
  *
  * `asyncPostProcess` may return an array of any length, allowing filtering or
- * expansion during post-processing.
+ * expansion during post-processing. Resolving to anything other than an array is a
+ * `TypeError` (the most common cause is a forgotten `return`).
  */
 export async function executeTwoPhaseChunksSequentially<InputChunk, IntermediateChunk, OutputChunk>(
   inputChunks: readonly InputChunk[],
   processor: TwoPhaseProcessor<InputChunk, IntermediateChunk, OutputChunk>,
   options: ExecutionOptions,
 ): Promise<OutputChunk[]> {
+  const resolved = resolveOptions(options)
   if (inputChunks.length === 0) {
     return []
   }
 
-  const resolved = resolveOptions(options)
   const results: OutputChunk[] = []
 
   await yieldToEventLoop()
@@ -253,9 +278,9 @@ export async function executeTwoPhaseChunksSequentially<InputChunk, Intermediate
 
   for (let index = 0; index < inputChunks.length; index++) {
     const chunk = inputChunks[index]
-    const chunkStartTime = Date.now()
+    const chunkStartTime = now()
     const intermediate = processor.syncTransform(chunk)
-    const chunkTimeTaken = Date.now() - chunkStartTime
+    const chunkTimeTaken = now() - chunkStartTime
 
     pendingIntermediates.push(intermediate)
     timeTaken += chunkTimeTaken
@@ -266,6 +291,13 @@ export async function executeTwoPhaseChunksSequentially<InputChunk, Intermediate
     const isLastChunk = index === inputChunks.length - 1
     if (isLastChunk || timeTaken >= resolved.executeSynchronouslyThresholdInMsecs) {
       const batchResults = await processor.asyncPostProcess(pendingIntermediates)
+      if (!Array.isArray(batchResults)) {
+        throw new TypeError(
+          `Execution "${resolved.id}": asyncPostProcess must resolve to an array, received ${
+            batchResults === null ? 'null' : typeof batchResults
+          }`,
+        )
+      }
       // Append via indexed push instead of `results.push(...batchResults)`:
       // spread would exceed V8's argument-count limit (~65535) for large async
       // batches (RangeError), which the headline use case (bulk DB returning
